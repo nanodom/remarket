@@ -1,0 +1,19 @@
+services:
+  db:
+    image: postgres:16
+    environment: {POSTGRES_USER: remarket, POSTGRES_PASSWORD: remarket, POSTGRES_DB: remarket}
+    volumes: [pgdata:/var/lib/postgresql/data]
+  osrm:
+    image: osrm/osrm-backend
+    command: osrm-routed --algorithm mld /data/region.osrm
+    volumes: ["./osrm-data:/data"]
+    ports: ["5000:5000"]
+  api:
+    build: .
+    environment:
+      DATABASE_URL: postgresql+psycopg://remarket:remarket@db/remarket
+      OSRM_URL: http://osrm:5000
+      NOMINATIM_UA: "ReMarket/2.0 (contacto@tudominio.cl)"
+    ports: ["8000:8000"]
+    depends_on: [db, osrm]
+volumes: {pgdata: {}}

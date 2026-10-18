@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ReMarket 2.0 · Logística de recuperación</title>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@600;800&family=Public+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+:root{--bg:#eef3f1;--sf:#fff;--tx:#17262b;--mu:#5d7078;--bd:#d3dedb;--ac:#17795a;--ac2:#2a62c9;--wa:#b87500;--er:#b3342b;--ok-bg:#dcf1e8;--wa-bg:#fbefcf;--er-bg:#f8dcd9;--bl-bg:#dce7fa;color-scheme:light}
+@media(prefers-color-scheme:dark){:root{--bg:#0f1a1d;--sf:#17262b;--tx:#e6efec;--mu:#97aaa6;--bd:#2c4047;--ac:#4fc79b;--ac2:#7aa5f2;--wa:#e6b04a;--er:#f08a80;--ok-bg:#16392e;--wa-bg:#3b3015;--er-bg:#41201d;--bl-bg:#1b2c4b;color-scheme:dark}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font:15px/1.5 "Public Sans",system-ui,sans-serif}
+h1,h2,h3{font-family:"Bricolage Grotesque","Public Sans",system-ui,sans-serif;margin:0;letter-spacing:-.01em}
+header{padding:20px 20px 0;max-width:1100px;margin:auto}
+h1{font-size:30px;font-weight:800}header p{margin:2px 0 14px;color:var(--mu);max-width:60ch}
+nav{display:flex;gap:4px;overflow-x:auto;border-bottom:1px solid var(--bd);padding:0 20px;max-width:1100px;margin:auto}
+nav button{background:none;border:0;border-bottom:3px solid transparent;padding:10px 12px;font:600 14px inherit;color:var(--mu);cursor:pointer;white-space:nowrap}
+nav button.on{color:var(--ac);border-color:var(--ac)}
+main{max-width:1100px;margin:auto;padding:20px}
+.g{display:grid;gap:16px}.g2{grid-template-columns:repeat(auto-fit,minmax(300px,1fr))}.g5{grid-template-columns:repeat(auto-fit,minmax(170px,1fr))}
+.box{background:var(--sf);border:1px solid var(--bd);border-radius:10px;padding:16px;min-width:0}
+.box h3{font-size:17px;margin-bottom:10px}.mt{margin-top:16px}
+.sc{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-size:14px}th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--bd);vertical-align:top}th{color:var(--mu);font-weight:600;font-size:13px}
+label{display:block;font-size:13px;color:var(--mu);margin:10px 0 3px}label.ck{display:flex;gap:8px;align-items:center;color:var(--tx);margin:4px 0}label.ck input{width:auto}
+input,select{width:100%;padding:9px;border:1px solid var(--bd);border-radius:7px;background:var(--bg);color:var(--tx);font:inherit}
+button.b{background:var(--ac);color:#fff;border:0;border-radius:7px;padding:9px 16px;font:600 14px inherit;cursor:pointer;margin-top:14px}
+button.b.s{background:none;color:var(--ac);border:1px solid var(--ac);margin:0;padding:5px 10px}
+button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--ac2);outline-offset:2px}
+button:disabled{opacity:.6;cursor:wait}
+.tag{display:inline-block;padding:1px 9px;border-radius:99px;font-size:12px;font-weight:600}
+.Alta{background:var(--er-bg);color:var(--er)}.Media,.Enruta{background:var(--wa-bg);color:var(--wa)}.Baja,.Disponible,.Entregado{background:var(--ok-bg);color:var(--ac)}.Asignado{background:var(--bl-bg);color:var(--ac2)}
+.kpi b{display:block;font:800 26px "Bricolage Grotesque",system-ui,sans-serif}.kpi span{color:var(--mu);font-size:13px}
+#msg{max-width:1100px;margin:14px auto 0;padding:0 20px}#msg div{padding:9px 12px;border-radius:7px;background:var(--bl-bg);font-size:14px}#msg div.err{background:var(--er-bg);color:var(--er)}
+.bar{display:flex;align-items:center;gap:10px;margin:8px 0;font-size:13px}.bar i{display:block;height:14px;background:var(--ac);border-radius:3px;min-width:2px}.bar em{width:170px;font-style:normal;flex:none}
+#map{height:440px;border-radius:8px;border:1px solid var(--bd);z-index:0}
+.n span{display:grid;place-items:center;width:26px;height:26px;border-radius:50%;background:var(--ac2);color:#fff;font:700 12px "Public Sans",sans-serif;border:2px solid #fff}
+small{color:var(--mu)}.fx{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+</style>
+</head>
+<body>
+<header>
+<h1>ReMarket 2.0</h1>
+<p>Recuperación, clasificación y distribución de productos de primera necesidad. Donantes, operador logístico y organizaciones beneficiarias.</p>
+</header>
+<nav id="nav"></nav>
+<div id="msg" role="status"></div>
+<main id="v"><p>Cargando datos…</p></main>
+<script>
+const CAT=["Alimentos perecibles","Alimentos no perecibles","Higiene y limpieza","Abrigo y ropa"];
+const TABS=["Registrar","Clasificar","Asignar","Rutas","Seguimiento","Indicadores"];
+const $=s=>document.querySelector(s);
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const clp=n=>"$"+Math.round(n).toLocaleString("es-CL");
+const f1=n=>(Math.round(n*10)/10).toLocaleString("es-CL");
+const stc=s=>s.replace(" ","");
+let tab=0,places=[],prods=[],ind={},ruta=null,map=null;
+const P=id=>places.find(p=>p.id===id)||{nombre:"—",personas:0};
+
+async function api(u,o){
+  const r=await fetch("/api"+u,o&&{...o,headers:{"Content-Type":"application/json"}});
+  const j=await r.json().catch(()=>null);
+  if(!r.ok)throw new Error(typeof(j&&j.detail)==="string"?j.detail:"Revisa los datos ingresados.");
+  return j}
+function aviso(t,err){$("#msg").innerHTML=t?`<div class="${err?"err":""}">${esc(t)}</div>`:""}
+async function cargar(){[places,prods,ind,ruta]=await Promise.all([api("/places"),api("/productos"),api("/indicadores"),api("/rutas/ultima")])}
+async function run(f){try{const m=await f();await cargar();render();aviso(m)}catch(e){aviso(e.message,true)}}
+
+const registrar=e=>{e.preventDefault();const f=e.target;return run(async()=>{
+  await api("/productos",{method:"POST",body:JSON.stringify({nombre:f.nom.value,categoria:f.cat.value,kg:+f.kg.value,estado:f.estado.value,vence:f.vence.value||null,donante_id:+f.don.value})});
+  return "Producto registrado."})};
+const crearLugar=e=>{e.preventDefault();const f=e.target;const nec=[...f.querySelectorAll("[name=nec]:checked")].map(x=>x.value);return run(async()=>{
+  const p=await api("/places",{method:"POST",body:JSON.stringify({nombre:f.nombre.value,tipo:f.tipo.value,direccion:f.direccion.value,personas:+f.personas.value||0,capacidad_kg:+f.cap.value||0,frio:f.frio.checked,necesidades:nec})});
+  return `Lugar agregado en ${p.lat.toFixed(4)}, ${p.lng.toFixed(4)}.`})};
+const asignar=()=>run(async()=>{const r=await api("/asignar",{method:"POST"});
+  return r.asignados+" productos asignados"+(r.sin_destino?`, ${r.sin_destino} sin destinatario compatible (revisa necesidades, cadena de frío o capacidad).`:".")});
+const planificar=()=>run(async()=>{await api("/rutas/planificar",{method:"POST"});return "Ruta planificada. Los productos quedaron En ruta."});
+const entregar=id=>run(async()=>{await api(`/productos/${id}/entregar`,{method:"POST"});return "Entrega registrada."});
+
+function vRegistrar(){const don=places.filter(p=>p.tipo==="donante"),ben=places.filter(p=>p.tipo==="beneficiario");
+return`<div class="g g2"><form class="box" onsubmit="registrar(event)"><h3>Registrar producto disponible</h3>
+<label>Producto<input name="nom" required placeholder="Ej: Leche UHT"></label>
+<label>Categoría<select name="cat">${CAT.map(c=>`<option>${c}</option>`).join("")}</select></label>
+<label>Cantidad (kg)<input name="kg" type="number" min="0.5" step="0.5" value="20" required></label>
+<label>Condición<select name="estado"><option>Bueno</option><option>Próximo a vencer</option><option>Regular</option></select></label>
+<label>Fecha de vencimiento (vacío si no vence)<input name="vence" type="date"></label>
+<label>Donante (punto de retiro)<select name="don">${don.map(d=>`<option value="${d.id}">${esc(d.nombre)}</option>`).join("")}</select></label>
+<button class="b">Registrar producto</button></form>
+<div class="g"><form class="box" onsubmit="crearLugar(event)"><h3>Agregar donante o beneficiario</h3>
+<label>Tipo<select name="tipo" onchange="$('#bf').style.display=this.value==='beneficiario'?'block':'none'"><option value="donante">Donante</option><option value="beneficiario">Beneficiario</option></select></label>
+<label>Nombre<input name="nombre" required></label>
+<label>Dirección (se geolocaliza automáticamente)<input name="direccion" required placeholder="Ej: Av. Costanera 123, Coquimbo"></label>
+<div id="bf" style="display:none"><label>Personas atendidas<input name="personas" type="number" min="0" value="0"></label>
+<label>Capacidad (kg)<input name="cap" type="number" min="0" value="100"></label>
+<label class="ck"><input type="checkbox" name="frio">Cuenta con cadena de frío</label>
+<label>Necesita</label>${CAT.map(c=>`<label class="ck"><input type="checkbox" name="nec" value="${c}">${c}</label>`).join("")}</div>
+<button class="b">Buscar y agregar</button></form>
+<div class="box"><h3>Actores del modelo</h3><p><b>Donantes:</b> ${don.map(d=>esc(d.nombre)).join(", ")||"—"}.</p><p><b>Beneficiarios:</b> ${ben.map(d=>esc(d.nombre)).join(", ")||"—"}.</p></div></div></div>`}
+
+function vClasificar(){return`<div class="box"><h3>Clasificación y prioridad</h3><div class="sc"><table><tr><th>Producto</th><th>Categoría</th><th>kg</th><th>Estado</th><th>Vence en</th><th>Puntaje</th><th>Prioridad</th></tr>${prods.map(p=>`<tr><td>${esc(p.nombre)}</td><td>${p.categoria}</td><td>${p.kg}</td><td>${p.estado}</td><td>${p.dias>=999?"No vence":p.dias+" d"}</td><td>${p.puntaje}</td><td><span class="tag ${p.prioridad}">${p.prioridad}</span></td></tr>`).join("")}</table></div>
+<p><small>Puntaje = peso de categoría (perecible 30, no perecible o higiene 20, abrigo 10) + urgencia por vencimiento (≤2 días: 15, ≤7 días: 8) + estado (próximo a vencer +10, regular −3). Alta ≥35, Media ≥20.</small></p></div>`}
+
+function vAsignar(){const dis=prods.filter(p=>p.status==="Disponible").length;
+return`<div class="box"><h3>Asignación de destinatarios</h3><p>${dis} productos disponibles. Se asigna por prioridad al beneficiario más cercano que necesite la categoría, tenga capacidad y, para perecibles, cadena de frío.</p><button class="b" onclick="asignar()">Asignar automáticamente</button></div>
+<div class="box sc mt"><h3>Beneficiarios</h3><table><tr><th>Organización</th><th>Personas</th><th>Necesita</th><th>Frío</th><th>Carga / capacidad</th></tr>${places.filter(p=>p.tipo==="beneficiario").map(r=>{const c=prods.filter(p=>p.destino_id===r.id&&p.status!=="Entregado").reduce((a,p)=>a+p.kg,0);return`<tr><td>${esc(r.nombre)}</td><td>${r.personas}</td><td>${r.necesidades.join(", ")}</td><td>${r.frio?"Sí":"No"}</td><td>${c} / ${r.capacidad_kg} kg</td></tr>`}).join("")}</table></div>`}
+
+function vRutas(){const r=ruta;
+return`<div class="box"><h3>Planificación de ruta</h3><p>Los tiempos y distancias salen de la red vial real (OSRM). Se ordenan primero los retiros y luego las entregas, volviendo al centro de acopio.</p><button class="b" onclick="planificar()">Planificar ruta con productos asignados</button></div>
+${r?`<div class="g g5 mt">${[["Distancia",f1(r.km)+" km"],["Tiempo estimado",Math.round(r.minutos)+" min"],["Costo total",clp(r.costo)],["Costo por retiro",clp(r.costo_por_retiro)],["Ahorro vs. orden simple",f1(r.ahorro_km)+" km"]].map(a=>`<div class="box kpi"><b>${a[1]}</b><span>${a[0]}</span></div>`).join("")}</div>`:""}
+<div class="box mt"><div id="map" role="img" aria-label="Mapa con puntos de retiro, entrega y ruta"></div>
+<p><small>Verde: donantes · azul: beneficiarios · negro: centro de acopio. ${r?(r.fuente==="osrm"?"Ruta calculada por calle con OSRM.":"OSRM no está disponible: se muestran distancias estimadas en línea recta."):"Planifica una ruta para verla en el mapa."}</small></p>
+${r?`<div class="sc"><table><tr><th>Parada</th><th>Tipo</th><th>Lugar</th></tr>${r.paradas.map((p,i)=>`<tr><td>${i+1}</td><td>${p.tipo}</td><td>${esc(p.nombre)}</td></tr>`).join("")}</table></div>`:""}</div>`}
+
+function initMap(){if(map){map.remove();map=null}
+map=L.map("map").setView([-29.93,-71.3],11);
+L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png",{maxZoom:19,attribution:"© OpenStreetMap"}).addTo(map);
+const COL={base:"#111",donante:"#17795a",beneficiario:"#2a62c9"},b=[];
+places.forEach(p=>{b.push([p.lat,p.lng]);L.circleMarker([p.lat,p.lng],{radius:8,color:COL[p.tipo],fillOpacity:.9}).bindPopup(`<b>${esc(p.nombre)}</b><br>${p.tipo}`).addTo(map)});
+if(ruta){const g=L.geoJSON(ruta.geometria,{style:{color:"#2a62c9",weight:5,opacity:.85}}).addTo(map);
+ ruta.paradas.forEach((s,i)=>L.marker([s.lat,s.lng],{icon:L.divIcon({className:"n",html:`<span>${i+1}</span>`,iconSize:[26,26]})}).bindPopup(`${s.tipo}: ${esc(s.nombre)}`).addTo(map));
+ map.fitBounds(g.getBounds().pad(.15))}
+else if(b.length)map.fitBounds(b,{padding:[30,30]})}
+
+function vSeg(){return`<div class="box sc"><h3>Seguimiento de retiros y entregas</h3><table><tr><th>Producto</th><th>kg</th><th>Origen</th><th>Destino</th><th>Estado</th><th></th></tr>${prods.map(p=>`<tr><td>${esc(p.nombre)}</td><td>${p.kg}</td><td>${esc(P(p.donante_id).nombre)}</td><td>${p.destino_id?esc(P(p.destino_id).nombre):"—"}</td><td><span class="tag ${stc(p.status)}">${p.status}</span></td><td>${p.status==="En ruta"?`<button class="b s" onclick="entregar(${p.id})">Marcar entregado</button>`:""}</td></tr>`).join("")}</table></div>`}
+
+function vInd(){const k=ind,kc=CAT.map(c=>[c,prods.filter(p=>p.status==="Entregado"&&p.categoria===c).reduce((a,p)=>a+p.kg,0)]),mx=Math.max(1,...kc.map(a=>a[1]));
+return`<div class="g g5">${[["Kilómetros recorridos",f1(k.km_recorridos)+" km"],["Costo por retiro",clp(k.costo_por_retiro)],["Tiempo de entrega",f1(k.tiempo_entrega_horas)+" h"],["Kilogramos recuperados",f1(k.kg_recuperados)+" kg"],["Beneficiarios",k.beneficiarios_org+" org. · "+k.beneficiarios_personas+" personas"]].map(a=>`<div class="box kpi"><b style="font-size:22px">${a[1]}</b><span>${a[0]}</span></div>`).join("")}</div>
+<div class="g g2 mt"><div class="box"><h3>Kilogramos entregados por categoría</h3>${kc.map(a=>`<div class="bar"><em>${a[0]}</em><i style="width:${a[1]/mx*50}%"></i>${a[1]} kg</div>`).join("")}</div>
+<div class="box sc"><h3>Definición de indicadores</h3><table><tr><th>Indicador</th><th>Fórmula</th></tr><tr><td>Km recorridos</td><td>Σ distancia real por calle de las rutas, km</td></tr><tr><td>Costo por retiro</td><td>(km × ${clp(k.costo_km)} + retiros × ${clp(k.fijo_retiro)}) ÷ retiros, CLP</td></tr><tr><td>Tiempo de entrega</td><td>promedio (entrega − solicitud), horas</td></tr><tr><td>Kg recuperados</td><td>Σ kg de productos entregados</td></tr><tr><td>Beneficiarios</td><td>organizaciones distintas con entrega y suma de sus personas</td></tr></table></div></div>`}
+
+function render(){$("#nav").innerHTML=TABS.map((t,i)=>`<button class="${i===tab?"on":""}" onclick="tab=${i};aviso('');render()">${t}</button>`).join("");
+$("#v").innerHTML=[vRegistrar,vClasificar,vAsignar,vRutas,vSeg,vInd][tab]();
+if(tab===3)initMap();else if(map){map.remove();map=null}}
+cargar().then(render).catch(e=>{$("#v").innerHTML="";aviso("No se pudo conectar con la API: "+e.message,true)});
+</script>
+</body>
+</html>
