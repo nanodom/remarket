@@ -9,7 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
-from . import logic, routing
+from . import chat, logic, routing
 from .models import Base, Place, Producto, Ruta, SessionLocal, engine
 
 NOMINATIM = os.getenv("NOMINATIM_URL", "https://nominatim.openstreetmap.org")
@@ -208,5 +208,7 @@ def indicadores(db=Depends(get_db)):
             "beneficiarios_org": len(benef), "beneficiarios_personas": personas,
             "costo_km": routing.COSTO_KM, "fijo_retiro": routing.FIJO_RETIRO}
 
+
+app.include_router(chat.router) 
 
 app.mount("/", StaticFiles(directory=Path(__file__).resolve().parent.parent / "frontend", html=True), name="web")

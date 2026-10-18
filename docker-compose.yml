@@ -10,10 +10,16 @@ services:
     ports: ["5000:5000"]
   api:
     build: .
+    env_file:
+    - .env
     environment:
-      DATABASE_URL: postgresql+psycopg://remarket:remarket@db/remarket
+      DATABASE_URL: ${DATABASE_URL}
       OSRM_URL: http://osrm:5000
       NOMINATIM_UA: "ReMarket/2.0 (contacto@tudominio.cl)"
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      CHAT_MODEL: ${CHAT_MODEL}
     ports: ["8000:8000"]
     depends_on: [db, osrm]
 volumes: {pgdata: {}}
+
+

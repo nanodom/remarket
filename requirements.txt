@@ -3,3 +3,9 @@ uvicorn[standard]>=0.30
 sqlalchemy>=2.0
 httpx>=0.27
 psycopg[binary]>=3.2
+google-genai
+python-dotenv
+sqlalchemy
+psycopg
+httpx
+pydantic
