@@ -3,7 +3,8 @@ import math
 import os
 import httpx
 
-OSRM_URL = os.getenv("OSRM_URL", "http://localhost:5000")
+#OSRM_URL = os.getenv("OSRM_URL", "http://localhost:5000")
+OSRM_URL = os.getenv("OSRM_URL", "https://router.project-osrm.org")
 COSTO_KM = float(os.getenv("COSTO_KM", 450))        # CLP por km
 FIJO_RETIRO = float(os.getenv("FIJO_RETIRO", 3500))  # CLP por retiro
 MIN_PARADA = float(os.getenv("MIN_PARADA", 10))      # minutos por parada
@@ -32,7 +33,8 @@ async def matrices(pts):
             j = r.json()
         fix = lambda m: [[1e9 if x is None else x for x in f] for f in m]
         return fix(j["durations"]), fix(j["distances"]), "osrm"
-    except Exception:
+    except Exception as e:
+        print(f"[!] Error de OSRM (matrices): {e}")
         dist = [[haversine(a, b) * 1300 for b in pts] for a in pts]
         return [[d / VEL_FALLBACK for d in f] for f in dist], dist, "estimado"
 
@@ -71,7 +73,8 @@ async def _ruta_final(pts, fuente, dist):
                 r.raise_for_status()
                 ro = r.json()["routes"][0]
             return ro["geometry"], ro["distance"] / 1000, ro["duration"] / 60
-        except Exception:
+        except Exception as e:
+            print(f"[!] Error de OSRM (ruta final): {e}")
             pass
     km = sum(dist[i][i + 1] for i in range(len(pts) - 1)) / 1000
     geom = {"type": "LineString", "coordinates": [[lng, lat] for lat, lng in pts]}

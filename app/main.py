@@ -4,13 +4,15 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import httpx
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from . import chat, logic, routing
 from .models import Base, Place, Producto, Ruta, SessionLocal, engine
+from .security import verificar_ip_abuseipdb
 
 NOMINATIM = os.getenv("NOMINATIM_URL", "https://nominatim.openstreetmap.org")
 NOMINATIM_UA = os.getenv("NOMINATIM_UA", "ReMarket/2.0 (contacto@tudominio.cl)")
@@ -54,6 +56,35 @@ async def lifespan(_):
     yield
 
 
+async def chequear_reputacion_ip(request: Request):
+    """
+    Dependencia de FastAPI para bloquear IPs reportadas en AbuseIPDB.
+    """
+    client_ip = request.client.host
+    
+    forwarded_for = request.headers.get("X-Forwarded-For")
+    if forwarded_for:
+        client_ip = forwarded_for.split(",")[0].strip()
+
+    if client_ip in ["127.0.0.1", "localhost", "::1"]:
+        return True
+
+    resultado = await verificar_ip_abuseipdb(client_ip)
+    
+    if "error" in resultado:
+        return True
+
+    score = resultado.get("abuseConfidenceScore", 0)
+    
+    if score > 50:
+        raise HTTPException(
+            status_code=403, 
+            detail=f"Acceso denegado: La IP {client_ip} presenta un puntaje de riesgo de abuso alto ({score}%)."
+        )
+    
+    return True
+
+
 app = FastAPI(title="ReMarket 2.0", lifespan=lifespan)
 
 
@@ -90,7 +121,7 @@ def prod_out(p):
 
 @app.get("/api/geocode")
 async def geocode(q: str):
-    """Dirección -> coordenadas (Nominatim; límite 1 consulta/s, usa tu propia instancia en producción)."""
+    """Dirección -> coordenadas (Nominatim)."""
     async with httpx.AsyncClient(timeout=10, headers={"User-Agent": NOMINATIM_UA}) as c:
         r = await c.get(f"{NOMINATIM}/search", params={"q": q, "format": "jsonv2", "countrycodes": "cl", "limit": 5})
     if r.status_code != 200:
@@ -211,4 +242,27 @@ def indicadores(db=Depends(get_db)):
 
 app.include_router(chat.router) 
 
-app.mount("/", StaticFiles(directory=Path(__file__).resolve().parent.parent / "frontend", html=True), name="web")
+
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self' https://unpkg.com https://fonts.googleapis.com https://fonts.gstatic.com; "
+        "style-src 'self' 'unsafe-inline' https://unpkg.com https://fonts.googleapis.com; "
+        "script-src 'self' 'unsafe-inline' https://unpkg.com; "
+        "img-src 'self' data: blob: https://*.openstreetmap.org https://tile.openstreetmap.org https://*.geoapify.com;"
+        "connect-src 'self' https://*.geoapify.com;"
+    )
+    return response
+
+
+# Archivos estáticos y ruta raíz
+app.mount("/static", StaticFiles(directory=Path(__file__).resolve().parent / "../frontend/static"), name="static")
+
+@app.get("/")
+def read_index():
+    return FileResponse(Path(__file__).resolve().parent / "../frontend/index.html")

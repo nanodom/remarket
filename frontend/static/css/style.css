@@ -1,0 +1,44 @@
+:root{--bg:#eef3f1;--sf:#fff;--tx:#17262b;--mu:#5d7078;--bd:#d3dedb;--ac:#17795a;--ac2:#2a62c9;--wa:#b87500;--er:#b3342b;--ok-bg:#dcf1e8;--wa-bg:#fbefcf;--er-bg:#f8dcd9;--bl-bg:#dce7fa;color-scheme:light}
+@media(prefers-color-scheme:dark){:root{--bg:#0f1a1d;--sf:#17262b;--tx:#e6efec;--mu:#97aaa6;--bd:#2c4047;--ac:#4fc79b;--ac2:#7aa5f2;--wa:#e6b04a;--er:#f08a80;--ok-bg:#16392e;--wa-bg:#3b3015;--er-bg:#41201d;--bl-bg:#1b2c4b;color-scheme:dark}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font:15px/1.5 "Public Sans",system-ui,sans-serif}
+h1,h2,h3{font-family:"Bricolage Grotesque","Public Sans",system-ui,sans-serif;margin:0;letter-spacing:-.01em}
+header{padding:20px 20px 0;max-width:1100px;margin:auto;display:flex;justify-content:space-between;align-items:flex-start}
+.header-content{flex:1}
+h1{font-size:30px;font-weight:800}
+header p{margin:2px 0 14px;color:var(--mu);max-width:60ch}
+nav{display:flex;gap:4px;overflow-x:auto;border-bottom:1px solid var(--bd);padding:0 20px;max-width:1100px;margin:auto}
+nav button{background:none;border:0;border-bottom:3px solid transparent;padding:10px 12px;font:600 14px inherit;color:var(--mu);cursor:pointer;white-space:nowrap}
+nav button.on{color:var(--ac);border-color:var(--ac)}
+main{max-width:1100px;margin:auto;padding:20px}
+.g{display:grid;gap:16px}.g2{grid-template-columns:repeat(auto-fit,minmax(300px,1fr))}.g5{grid-template-columns:repeat(auto-fit,minmax(170px,1fr))}
+.box{background:var(--sf);border:1px solid var(--bd);border-radius:10px;padding:16px;min-width:0}
+.box h3{font-size:17px;margin-bottom:10px}.mt{margin-top:16px}
+.sc{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-size:14px}th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--bd);vertical-align:top}th{color:var(--mu);font-weight:600;font-size:13px}
+label{display:block;font-size:13px;color:var(--mu);margin:10px 0 3px}label.ck{display:flex;gap:8px;align-items:center;color:var(--tx);margin:4px 0}label.ck input{width:auto}
+input,select{width:100%;padding:9px;border:1px solid var(--bd);border-radius:7px;background:var(--bg);color:var(--tx);font:inherit}
+button.b{background:var(--ac);color:#fff;border:0;border-radius:7px;padding:9px 16px;font:600 14px inherit;cursor:pointer;margin-top:14px}
+button.b.s{background:none;color:var(--ac);border:1px solid var(--ac);margin:0;padding:5px 10px}
+button.b.danger{background:var(--er);margin-top:0}
+button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--ac2);outline-offset:2px}
+button:disabled{opacity:.6;cursor:wait}
+.tag{display:inline-block;padding:1px 9px;border-radius:99px;font-size:12px;font-weight:600}
+.Alta{background:var(--er-bg);color:var(--er)}.Media,.Enruta{background:var(--wa-bg);color:var(--wa)}.Baja,.Disponible,.Entregado{background:var(--ok-bg);color:var(--ac)}.Asignado{background:var(--bl-bg);color:var(--ac2)}
+.kpi b{display:block;font:800 26px "Bricolage Grotesque",system-ui,sans-serif}.kpi span{color:var(--mu);font-size:13px}
+#msg{max-width:1100px;margin:14px auto 0;padding:0 20px}#msg div{padding:9px 12px;border-radius:7px;background:var(--bl-bg);font-size:14px}#msg div.err{background:var(--er-bg);color:var(--er)}
+.bar{display:flex;align-items:center;gap:10px;margin:8px 0;font-size:13px}.bar i{display:block;height:14px;background:var(--ac);border-radius:3px;min-width:2px}.bar em{width:170px;font-style:normal;flex:none}
+#map{height:440px;border-radius:8px;border:1px solid var(--bd);z-index:0}
+.n span{display:grid;place-items:center;width:26px;height:26px;border-radius:50%;background:var(--ac2);color:#fff;font:700 12px "Public Sans",sans-serif;border:2px solid #fff}
+small{color:var(--mu)}.fx{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.login-wrapper{max-width:400px;margin:80px auto;padding:20px}
+.camion-animado {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    filter: drop-shadow(0 4px 6px rgba(0,0,0,0.4)); /* Le da una sombra al camión */
+}
+
+#camion-emoji {
+    transform-origin: center center; /* Asegura que gire sobre su propio eje */
+}
