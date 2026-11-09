@@ -1,9 +1,9 @@
 """Rutas reales con OSRM (tabla de matrices + ruta final). Si OSRM no responde, usa estimaciones."""
 import math
 import os
+
 import httpx
 
-#OSRM_URL = os.getenv("OSRM_URL", "http://localhost:5000")
 OSRM_URL = os.getenv("OSRM_URL", "https://router.project-osrm.org")
 COSTO_KM = float(os.getenv("COSTO_KM", 450))        # CLP por km
 FIJO_RETIRO = float(os.getenv("FIJO_RETIRO", 3500))  # CLP por retiro
@@ -48,23 +48,27 @@ def _nn(cost, start, nodes):
     return orden
 
 
-def _largo(cost, start, orden):
-    return sum(cost[a][b] for a, b in zip([start] + orden, orden))
+def _largo(cost, start, orden, fin=None):
+    """Costo del recorrido start -> orden [-> fin]. `fin` cuenta el regreso a la base."""
+    puntos = [start] + orden + ([fin] if fin is not None else [])
+    return sum(cost[a][b] for a, b in zip(puntos, puntos[1:]))
 
 
-def _dos_opt(cost, start, orden):
+def _dos_opt(cost, start, orden, fin=None):
     mejor, mejora = orden, True
     while mejora:
         mejora = False
         for i in range(len(mejor) - 1):
             for j in range(i + 1, len(mejor)):
                 cand = mejor[:i] + mejor[i:j + 1][::-1] + mejor[j + 1:]
-                if _largo(cost, start, cand) < _largo(cost, start, mejor) - 1e-9:
+                if _largo(cost, start, cand, fin) < _largo(cost, start, mejor, fin) - 1e-9:
                     mejor, mejora = cand, True
     return mejor
 
 
-async def _ruta_final(pts, fuente, dist):
+async def _ruta_final(pts, fuente, dist, dur):
+    """Devuelve (geometría, km, minutos, fuente_geometría).
+    `dist` y `dur` son las matrices ya reducidas a los puntos de `pts`, en el mismo orden."""
     if fuente == "osrm":
         try:
             async with httpx.AsyncClient(timeout=20) as c:
@@ -72,13 +76,14 @@ async def _ruta_final(pts, fuente, dist):
                                 params={"overview": "full", "geometries": "geojson"})
                 r.raise_for_status()
                 ro = r.json()["routes"][0]
-            return ro["geometry"], ro["distance"] / 1000, ro["duration"] / 60
+            return ro["geometry"], ro["distance"] / 1000, ro["duration"] / 60, "osrm"
         except Exception as e:
             print(f"[!] Error de OSRM (ruta final): {e}")
-            pass
-    km = sum(dist[i][i + 1] for i in range(len(pts) - 1)) / 1000
+    n = len(pts)
+    km = sum(dist[i][i + 1] for i in range(n - 1)) / 1000
+    minutos = sum(dur[i][i + 1] for i in range(n - 1)) / 60
     geom = {"type": "LineString", "coordinates": [[lng, lat] for lat, lng in pts]}
-    return geom, km, km * 1000 / VEL_FALLBACK / 60
+    return geom, km, minutos, "estimado"
 
 
 async def planificar(base, donantes, beneficiarios):
@@ -89,17 +94,24 @@ async def planificar(base, donantes, beneficiarios):
     dur, dist, fuente = await matrices(pts)
     idx_d = list(range(1, 1 + len(donantes)))
     idx_b = list(range(1 + len(donantes), len(pts)))
+
     o_d = _dos_opt(dur, 0, _nn(dur, 0, idx_d))
-    o_b = _dos_opt(dur, o_d[-1], _nn(dur, o_d[-1], idx_b))
+    # Las entregas se optimizan incluyendo el regreso a la base (nodo 0).
+    o_b = _dos_opt(dur, o_d[-1], _nn(dur, o_d[-1], idx_b), fin=0)
+
     seq = [0] + o_d + o_b + [0]
     ingenuo = [0] + idx_d + idx_b + [0]
-    geom, km, minutos = await _ruta_final([pts[i] for i in seq], fuente, [[dist[a][b] for b in seq] for a in seq])
+    sub = lambda m: [[m[a][b] for b in seq] for a in seq]
+    geom, km, minutos, fuente_geom = await _ruta_final([pts[i] for i in seq], fuente, sub(dist), sub(dur))
+
     km_ing = sum(dist[a][b] for a, b in zip(ingenuo, ingenuo[1:])) / 1000
+    km_opt = sum(dist[a][b] for a, b in zip(seq, seq[1:])) / 1000
     return {
         "retiros": [i - 1 for i in o_d],
         "entregas": [i - 1 - len(donantes) for i in o_b],
         "geometria": geom, "km": km,
         "minutos": minutos + MIN_PARADA * (len(seq) - 2),
-        "ahorro_km": max(0.0, km_ing - sum(dist[a][b] for a, b in zip(seq, seq[1:])) / 1000),
-        "fuente": fuente,
+        "ahorro_km": max(0.0, km_ing - km_opt),
+        # "osrm" solo si matrices Y geometría vinieron de OSRM; si no, se avisa como estimado.
+        "fuente": "osrm" if fuente == "osrm" and fuente_geom == "osrm" else "estimado",
     }

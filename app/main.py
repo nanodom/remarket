@@ -1,17 +1,18 @@
 import os
 from contextlib import asynccontextmanager
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 from pathlib import Path
+from uuid import UUID
 
 import httpx
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import inspect, select
 
-from . import chat, logic, routing
-from .models import Base, Place, Producto, Ruta, SessionLocal, engine
+from . import auth, chat, logic, routing
+from .models import Base, Place, Producto, Ruta, SessionLocal, Usuario, ahora, engine
 from .security import verificar_ip_abuseipdb
 
 NOMINATIM = os.getenv("NOMINATIM_URL", "https://nominatim.openstreetmap.org")
@@ -21,6 +22,21 @@ NOMINATIM_UA = os.getenv("NOMINATIM_UA", "ReMarket/2.0 (contacto@tudominio.cl)")
 def get_db():
     with SessionLocal() as db:
         yield db
+
+
+def verificar_esquema():
+    """Falla con un mensaje claro si la BD existente no tiene las columnas que usa la app."""
+    insp = inspect(engine)
+    faltan = []
+    for t in Base.metadata.sorted_tables:
+        if insp.has_table(t.name):
+            existentes = {c["name"] for c in insp.get_columns(t.name)}
+            faltan += [f"{t.name}.{c.name}" for c in t.columns if c.name not in existentes]
+    if faltan:
+        raise RuntimeError(
+            "La base de datos no tiene estas columnas: " + ", ".join(faltan)
+            + ". Ejecuta db/01_schema_remarket.sql sobre tu base PostgreSQL."
+        )
 
 
 def seed(db):
@@ -50,76 +66,102 @@ def seed(db):
 
 @asynccontextmanager
 async def lifespan(_):
-    Base.metadata.create_all(engine)
+    Base.metadata.create_all(engine)  # crea solo tablas que no existan (no altera las existentes)
+    verificar_esquema()
     with SessionLocal() as db:
-        seed(db)
+        if os.getenv("SEED_DEMO", "1") == "1":
+            seed(db)
+        auth.asegurar_admin(db)
     yield
 
 
 async def chequear_reputacion_ip(request: Request):
-    """
-    Dependencia de FastAPI para bloquear IPs reportadas en AbuseIPDB.
-    """
-    client_ip = request.client.host
-    
+    """Dependencia de FastAPI para bloquear IPs reportadas en AbuseIPDB (se usa en el login)."""
+    client_ip = request.client.host if request.client else ""
+
     forwarded_for = request.headers.get("X-Forwarded-For")
     if forwarded_for:
         client_ip = forwarded_for.split(",")[0].strip()
 
-    if client_ip in ["127.0.0.1", "localhost", "::1"]:
+    if client_ip in ["127.0.0.1", "localhost", "::1", ""]:
         return True
 
     resultado = await verificar_ip_abuseipdb(client_ip)
-    
     if "error" in resultado:
         return True
 
     score = resultado.get("abuseConfidenceScore", 0)
-    
     if score > 50:
         raise HTTPException(
-            status_code=403, 
+            status_code=403,
             detail=f"Acceso denegado: La IP {client_ip} presenta un puntaje de riesgo de abuso alto ({score}%)."
         )
-    
     return True
 
 
 app = FastAPI(title="ReMarket 2.0", lifespan=lifespan)
+# Todo lo que cuelga de `api` exige sesión válida.
+api = APIRouter(prefix="/api", dependencies=[Depends(auth.usuario_actual)])
+
+
+class LoginIn(BaseModel):
+    username: str = Field(max_length=50)
+    password: str = Field(max_length=200)
 
 
 class PlaceIn(BaseModel):
-    nombre: str
+    nombre: str = Field(min_length=1, max_length=100)
     tipo: str = Field(pattern="^(donante|beneficiario|base)$")
-    lat: float | None = None
-    lng: float | None = None
-    direccion: str = ""
-    personas: int = 0
-    capacidad_kg: float = 0
+    lat: float | None = Field(default=None, ge=-90, le=90)
+    lng: float | None = Field(default=None, ge=-180, le=180)
+    direccion: str = Field(default="", max_length=255)
+    personas: int = Field(default=0, ge=0)
+    capacidad_kg: int = Field(default=0, ge=0)
     frio: bool = False
     necesidades: list[str] = []
 
 
 class ProductoIn(BaseModel):
-    nombre: str
+    nombre: str = Field(min_length=1, max_length=100)
     categoria: str
-    kg: float = Field(gt=0)
+    kg: float = Field(gt=0, lt=1_000_000)
     estado: str = Field(pattern="^(Bueno|Próximo a vencer|Regular)$")
     vence: date | None = None
-    donante_id: int
+    donante_id: UUID
 
 
 def place_out(p):
-    return {c.name: getattr(p, c.name) for c in Place.__table__.columns}
+    return {"id": str(p.id), "nombre": p.nombre, "tipo": p.tipo, "lat": p.lat, "lng": p.lng,
+            "direccion": p.direccion or "", "personas": p.personas or 0,
+            "capacidad_kg": p.capacidad_kg or 0, "frio": bool(p.frio),
+            "necesidades": p.necesidades or []}
 
 
 def prod_out(p):
-    return {"id": p.id, "nombre": p.nombre, "categoria": p.categoria, "kg": p.kg, "estado": p.estado,
-            "dias": logic.dias(p), "puntaje": logic.score(p), "prioridad": logic.prioridad(p),
-            "donante_id": p.donante_id, "destino_id": p.destino_id, "status": p.status}
+    return {"id": str(p.id), "nombre": p.nombre, "categoria": p.categoria, "kg": float(p.kg or 0),
+            "estado": p.estado, "dias": logic.dias(p), "puntaje": logic.score(p),
+            "prioridad": logic.prioridad(p),
+            "donante_id": str(p.donante_id) if p.donante_id else None,
+            "destino_id": str(p.destino_id) if p.destino_id else None,
+            "status": p.status or "Disponible"}
 
 
-@app.get("/api/geocode")
+# ------------------------------------------------------------------ Autenticación
+
+@app.post("/api/login", dependencies=[Depends(chequear_reputacion_ip)])
+def login(d: LoginIn, db=Depends(get_db)):
+    u = db.scalars(select(Usuario).where(Usuario.nombre_usuario == d.username)).first()
+    ok = auth.verificar_password(d.password, u.contrasena_hash if u else auth.HASH_FALSO)
+    if not (u and ok and u.estado_activo):
+        raise HTTPException(401, "Credenciales inválidas o usuario no autorizado.")
+    roles = [r.nombre_rol for r in u.roles]
+    return {"token": auth.crear_token(str(u.id), u.nombre_usuario, roles),
+            "usuario": u.nombre_usuario, "roles": roles}
+
+
+# ------------------------------------------------------------------ Lugares
+
+@api.get("/geocode")
 async def geocode(q: str):
     """Dirección -> coordenadas (Nominatim)."""
     async with httpx.AsyncClient(timeout=10, headers={"User-Agent": NOMINATIM_UA}) as c:
@@ -129,12 +171,12 @@ async def geocode(q: str):
     return [{"nombre": x["display_name"], "lat": float(x["lat"]), "lng": float(x["lon"])} for x in r.json()]
 
 
-@app.get("/api/places")
+@api.get("/places")
 def listar_places(db=Depends(get_db)):
-    return [place_out(p) for p in db.scalars(select(Place))]
+    return [place_out(p) for p in db.scalars(select(Place).order_by(Place.nombre))]
 
 
-@app.post("/api/places", status_code=201)
+@api.post("/places", status_code=201)
 async def crear_place(d: PlaceIn, db=Depends(get_db)):
     lat, lng = d.lat, d.lng
     if lat is None or lng is None:
@@ -144,18 +186,23 @@ async def crear_place(d: PlaceIn, db=Depends(get_db)):
         if not res:
             raise HTTPException(422, "No se encontró la dirección")
         lat, lng = res[0]["lat"], res[0]["lng"]
+    for c in d.necesidades:
+        if c not in logic.CATEGORIAS:
+            raise HTTPException(422, f"Categoría no válida: {c}")
     p = Place(**{**d.model_dump(), "lat": lat, "lng": lng})
     db.add(p)
     db.commit()
     return place_out(p)
 
 
-@app.get("/api/productos")
+# ------------------------------------------------------------------ Productos
+
+@api.get("/productos")
 def listar_productos(db=Depends(get_db)):
     return sorted((prod_out(p) for p in db.scalars(select(Producto))), key=lambda x: -x["puntaje"])
 
 
-@app.post("/api/productos", status_code=201)
+@api.post("/productos", status_code=201)
 def crear_producto(d: ProductoIn, db=Depends(get_db)):
     if d.categoria not in logic.CATEGORIAS:
         raise HTTPException(422, "Categoría no válida")
@@ -164,83 +211,113 @@ def crear_producto(d: ProductoIn, db=Depends(get_db)):
     donante = db.get(Place, d.donante_id)
     if not donante or donante.tipo != "donante":
         raise HTTPException(422, "Donante no válido")
-    p = Producto(**d.model_dump())
+    p = Producto(**d.model_dump(), status="Disponible")
     db.add(p)
     db.commit()
     return prod_out(p)
 
 
-@app.post("/api/asignar")
+@api.post("/asignar")
 def asignar(db=Depends(get_db)):
     ok, no = logic.asignar(db)
     return {"asignados": ok, "sin_destino": no}
 
 
-@app.post("/api/rutas/planificar")
+@api.post("/productos/{pid}/entregar")
+def entregar(pid: UUID, db=Depends(get_db)):
+    p = db.get(Producto, pid)
+    if not p or p.status != "En ruta":
+        raise HTTPException(400, "El producto debe estar En ruta")
+    p.status, p.entregado = "Entregado", ahora()
+    db.commit()
+    return prod_out(p)
+
+
+# ------------------------------------------------------------------ Rutas
+
+@api.post("/rutas/planificar")
 async def planificar(db=Depends(get_db)):
-    items = db.scalars(select(Producto).where(Producto.status == "Asignado")).all()
+    items = db.scalars(select(Producto).where(
+        Producto.status == "Asignado",
+        Producto.donante_id.is_not(None),
+        Producto.destino_id.is_not(None))).all()
     if not items:
         raise HTTPException(400, "No hay productos asignados para planificar")
     base = db.scalars(select(Place).where(Place.tipo == "base")).first()
     if not base:
         raise HTTPException(400, "Falta registrar la base logística")
     lug = {p.id: p for p in db.scalars(select(Place))}
-    ids_d = sorted({p.donante_id for p in items})
-    ids_b = sorted({p.destino_id for p in items})
+    ids_d = sorted({p.donante_id for p in items}, key=str)
+    ids_b = sorted({p.destino_id for p in items}, key=str)
+
+    sin_coord = [lug[i].nombre for i in (base.id, *ids_d, *ids_b) if lug[i].lat is None or lug[i].lng is None]
+    if sin_coord:
+        raise HTTPException(400, "Lugares sin coordenadas: " + ", ".join(sin_coord))
+
     xy = lambda i: (lug[i].lat, lug[i].lng)
     r = await routing.planificar((base.lat, base.lng), [xy(i) for i in ids_d], [xy(i) for i in ids_b])
-    paradas = [{"tipo": "retiro", "id": ids_d[i], "nombre": lug[ids_d[i]].nombre, "lat": lug[ids_d[i]].lat, "lng": lug[ids_d[i]].lng} for i in r["retiros"]]
-    paradas += [{"tipo": "entrega", "id": ids_b[i], "nombre": lug[ids_b[i]].nombre, "lat": lug[ids_b[i]].lat, "lng": lug[ids_b[i]].lng} for i in r["entregas"]]
+
+    def parada(tipo, i):
+        return {"tipo": tipo, "id": str(i), "nombre": lug[i].nombre, "lat": lug[i].lat, "lng": lug[i].lng}
+
+    # El camión sale y vuelve a la base: se muestra al inicio y al final del recorrido.
+    inicio = parada("base", base.id)
+    paradas = ([inicio]
+               + [parada("retiro", ids_d[i]) for i in r["retiros"]]
+               + [parada("entrega", ids_b[i]) for i in r["entregas"]]
+               + [inicio])
+
     costo = r["km"] * routing.COSTO_KM + len(ids_d) * routing.FIJO_RETIRO
-    ruta = Ruta(km=r["km"], minutos=r["minutos"], costo=costo, retiros=len(ids_d), ahorro_km=r["ahorro_km"],
-                fuente=r["fuente"], geometria=r["geometria"], paradas=paradas)
+    ruta = Ruta(km=round(r["km"], 2), minutos=round(r["minutos"]), costo=round(costo, 2),
+                retiros=len(ids_d), ahorro_km=round(r["ahorro_km"], 2), fuente=r["fuente"],
+                geometria=r["geometria"], paradas=paradas)
     db.add(ruta)
     db.flush()
     for p in items:
         p.status, p.ruta_id = "En ruta", ruta.id
     db.commit()
-    return {"id": ruta.id, "km": ruta.km, "minutos": ruta.minutos, "costo": costo,
-            "costo_por_retiro": costo / len(ids_d), "ahorro_km": ruta.ahorro_km,
+    return {"id": str(ruta.id), "km": ruta.km, "minutos": ruta.minutos, "costo": ruta.costo,
+            "costo_por_retiro": ruta.costo / len(ids_d), "ahorro_km": ruta.ahorro_km,
             "fuente": ruta.fuente, "geometria": ruta.geometria, "paradas": paradas}
 
 
-@app.post("/api/productos/{pid}/entregar")
-def entregar(pid: int, db=Depends(get_db)):
-    p = db.get(Producto, pid)
-    if not p or p.status != "En ruta":
-        raise HTTPException(400, "El producto debe estar En ruta")
-    p.status, p.entregado = "Entregado", datetime.utcnow()
-    db.commit()
-    return prod_out(p)
-
-
-@app.get("/api/rutas/ultima")
+@api.get("/rutas/ultima")
 def ultima_ruta(db=Depends(get_db)):
-    r = db.scalars(select(Ruta).order_by(Ruta.id.desc())).first()
+    """Última ruta que todavía tiene productos En ruta; si ya se entregó todo, no hay ruta activa."""
+    r = db.scalars(select(Ruta).order_by(Ruta.creada.desc())).first()
     if not r:
         return None
-    return {"id": r.id, "km": r.km, "minutos": r.minutos, "costo": r.costo, "retiros": r.retiros,
-            "costo_por_retiro": r.costo / r.retiros, "ahorro_km": r.ahorro_km, "fuente": r.fuente,
-            "geometria": r.geometria, "paradas": r.paradas}
+    activa = db.scalars(select(Producto.id).where(
+        Producto.ruta_id == r.id, Producto.status == "En ruta").limit(1)).first()
+    if activa is None:
+        return None
+    costo = r.costo or 0
+    return {"id": str(r.id), "km": r.km or 0, "minutos": r.minutos or 0, "costo": costo,
+            "retiros": r.retiros or 0, "costo_por_retiro": costo / r.retiros if r.retiros else 0,
+            "ahorro_km": r.ahorro_km or 0, "fuente": r.fuente,
+            "geometria": r.geometria, "paradas": r.paradas or []}
 
 
-@app.get("/api/indicadores")
+# ------------------------------------------------------------------ Indicadores
+
+@api.get("/indicadores")
 def indicadores(db=Depends(get_db)):
     rutas = db.scalars(select(Ruta)).all()
     ent = db.scalars(select(Producto).where(Producto.status == "Entregado")).all()
-    retiros = sum(r.retiros for r in rutas)
-    horas = [(p.entregado - p.creado).total_seconds() / 3600 for p in ent if p.entregado]
-    benef = {p.destino_id for p in ent}
-    personas = sum(db.get(Place, b).personas for b in benef)
-    return {"km_recorridos": round(sum(r.km for r in rutas), 1),
-            "costo_por_retiro": round(sum(r.costo for r in rutas) / retiros) if retiros else 0,
+    retiros = sum(r.retiros or 0 for r in rutas)
+    horas = [(p.entregado - p.creado).total_seconds() / 3600 for p in ent if p.entregado and p.creado]
+    benef = {p.destino_id for p in ent if p.destino_id}
+    personas = sum((db.get(Place, b).personas or 0) for b in benef if db.get(Place, b))
+    return {"km_recorridos": round(sum(r.km or 0 for r in rutas), 1),
+            "costo_por_retiro": round(sum(r.costo or 0 for r in rutas) / retiros) if retiros else 0,
             "tiempo_entrega_horas": round(sum(horas) / len(horas), 1) if horas else 0,
-            "kg_recuperados": sum(p.kg for p in ent),
+            "kg_recuperados": float(sum(p.kg or 0 for p in ent)),
             "beneficiarios_org": len(benef), "beneficiarios_personas": personas,
             "costo_km": routing.COSTO_KM, "fijo_retiro": routing.FIJO_RETIRO}
 
 
-app.include_router(chat.router) 
+app.include_router(api)
+app.include_router(chat.router, dependencies=[Depends(auth.usuario_actual)])
 
 
 @app.middleware("http")
@@ -249,7 +326,7 @@ async def add_security_headers(request: Request, call_next):
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
-    
+
     response.headers["Content-Security-Policy"] = (
         "default-src 'self' https://unpkg.com https://fonts.googleapis.com https://fonts.gstatic.com; "
         "style-src 'self' 'unsafe-inline' https://unpkg.com https://fonts.googleapis.com; "
@@ -262,6 +339,7 @@ async def add_security_headers(request: Request, call_next):
 
 # Archivos estáticos y ruta raíz
 app.mount("/static", StaticFiles(directory=Path(__file__).resolve().parent / "../frontend/static"), name="static")
+
 
 @app.get("/")
 def read_index():

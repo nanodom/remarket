@@ -1,13 +1,20 @@
-import { aviso } from './config.js';
-
-export async function api(endpoint, options) {
+export async function api(endpoint, options = {}) {
   const token = localStorage.getItem("token");
   const headers = {
     "Content-Type": "application/json",
-    ...(token ? { "Authorization": `Bearer ${token}` } : {})
+    ...(token ? { "Authorization": `Bearer ${token}` } : {}),
+    ...(options.headers || {})
   };
 
-  const response = await fetch("/api" + endpoint, options && { ...options, headers });
+  // Antes, las peticiones GET (sin `options`) se enviaban sin cabeceras ni token.
+  const response = await fetch("/api" + endpoint, { ...options, headers });
+
+  if (response.status === 401 && endpoint !== "/login") {
+    localStorage.removeItem("token");
+    location.reload();
+    throw new Error("Sesión expirada. Vuelve a ingresar.");
+  }
+
   const data = await response.json().catch(() => null);
 
   if (!response.ok) {

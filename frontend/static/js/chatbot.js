@@ -78,9 +78,10 @@
     historial.push({ role: "user", content: texto });
     const esp = pintar("bot", "Escribiendo…");
     try {
-      const pestana = typeof tab !== "undefined" && typeof TABS !== "undefined" ? TABS[tab] : "";
+      const pestana = window.remarketTab || "";
       const r = await fetch("/api/chat", {
-        method: "POST", headers: { "Content-Type": "application/json" },
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": "Bearer " + (localStorage.getItem("token") || "") },
         body: JSON.stringify({ mensajes: historial.slice(-12), pestana }),
       });
       if (!r.ok) throw new Error();

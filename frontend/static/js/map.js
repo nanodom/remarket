@@ -2,9 +2,20 @@ import { esc, GEOAPIFY_API_KEY, aviso } from './config.js';
 
 let map = null;
 let markerCamion = null;
-let animacionCamion = null;
+let timerCamion = null;
+
+// Detiene el bucle de la simulación y quita el camión. Debe llamarse ANTES de map.remove().
+function detenerSimulacion() {
+  if (timerCamion) {
+    clearTimeout(timerCamion);
+    timerCamion = null;
+  }
+  if (markerCamion && map) map.removeLayer(markerCamion);
+  markerCamion = null;
+}
 
 export function initMap(places, ruta) {
+  detenerSimulacion();
   if (map) {
     map.remove();
     map = null;
@@ -26,6 +37,7 @@ export function initMap(places, ruta) {
   const bounds = [];
 
   places.forEach(p => {
+    if (p.lat == null || p.lng == null) return;
     bounds.push([p.lat, p.lng]);
     L.circleMarker([p.lat, p.lng], { radius: 8, color: COL[p.tipo], fillOpacity: .9 })
       .bindPopup(`<b>${esc(p.nombre)}</b><br>${p.tipo}`)
@@ -46,60 +58,58 @@ export function initMap(places, ruta) {
 }
 
 export function simularRecorrido(ruta) {
-  if (!ruta || !ruta.geometria || !ruta.geometria.coordinates) {
+  if (!map || !ruta?.geometria?.coordinates) {
     aviso("Primero debes planificar una ruta para ver la simulación.", true);
     return;
   }
+  detenerSimulacion(); // evita dos animaciones simultáneas
 
-  if (animacionCamion) cancelAnimationFrame(animacionCamion);
-  if (markerCamion && map) map.removeLayer(markerCamion);
+  const todas = ruta.geometria.coordinates.map(c => [c[1], c[0]]);
+  if (todas.length < 2) return;
 
-  const coords = ruta.geometria.coordinates.map(c => [c[1], c[0]]);
-  if (coords.length < 2) return;
+  // La geometría puede tener miles de puntos: se reduce a ~300 pasos para que el movimiento sea fluido.
+  const paso = Math.max(1, Math.floor(todas.length / 300));
+  const coords = todas.filter((_, i) => i % paso === 0);
+  coords.push(todas[todas.length - 1]);
+  const intervalo = 30000 / coords.length; // ~30 s en total
 
-  const iconoCamion = L.divIcon({
-    className: 'camion-animado',
-    html: '<div id="camion-emoji" style="font-size: 28px; transition: transform 0.1s linear;">🚚</div>',
-    iconSize: [30, 30],
-    iconAnchor: [15, 15]
-  });
+  markerCamion = L.marker(coords[0], {
+    icon: L.divIcon({
+      className: "camion-animado",
+      html: '<div id="camion-emoji" style="font-size:28px">🚚</div>',
+      iconSize: [30, 30],
+      iconAnchor: [15, 15]
+    })
+  }).addTo(map);
 
-  markerCamion = L.marker(coords[0], { icon: iconoCamion }).addTo(map);
-
-  const duracionTotalMs = 30000;
-  const tiempoPorPunto = duracionTotalMs / coords.length;
-  let index = 0;
-
-  function animar() {
-    if (index >= coords.length - 1) {
-      aviso("¡Simulación de ruta completada con éxito!");
-      markerCamion = null;
-      animacionCamion = null;
+  let i = 0;
+  const animar = () => {
+    // Si se cambió de pestaña (mapa destruido) o se detuvo, el bucle termina solo.
+    if (!map || !markerCamion) return;
+    if (i >= coords.length - 1) {
+      aviso("¡Simulación de ruta completada!");
+      timerCamion = null;
       return;
     }
+    const a = coords[i];
+    const b = coords[i + 1];
+    markerCamion.setLatLng(b);
 
-    const actual = coords[index];
-    const siguiente = coords[index + 1];
-
-    markerCamion.setLatLng(siguiente);
-
-    const angulo = Math.atan2(siguiente[1] - actual[1], siguiente[0] - actual[0]) * 180 / Math.PI;
-    const emoji = document.getElementById('camion-emoji');
+    const angulo = Math.atan2(b[1] - a[1], b[0] - a[0]) * 180 / Math.PI;
+    const emoji = document.getElementById("camion-emoji");
     if (emoji) emoji.style.transform = `rotate(${angulo - 90}deg)`;
 
-    map.panTo(siguiente, { animate: false });
-    index++;
+    map.panTo(b, { animate: false });
+    i++;
+    timerCamion = setTimeout(animar, intervalo);
+  };
 
-    animacionCamion = requestAnimationFrame(() => {
-      setTimeout(animar, tiempoPorPunto);
-    });
-  }
-
-  aviso("Iniciando simulación de trayecto logístico en tiempo real...");
+  aviso("Iniciando simulación del recorrido...");
   animar();
 }
 
 export function destroyMap() {
+  detenerSimulacion();
   if (map) {
     map.remove();
     map = null;

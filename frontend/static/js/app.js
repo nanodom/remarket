@@ -35,12 +35,13 @@ async function handleLogin(e) {
   const f = e.target;
   try {
     aviso("");
-    if (f.username.value === "admin" && f.password.value === "remarket2026") {
-      localStorage.setItem("token", "mock-token-company");
-      initApp();
-    } else {
-      throw new Error("Credenciales inválidas o usuario no autorizado.");
-    }
+    // Validación real contra la tabla `usuario` (hash + estado_activo) en el backend.
+    const r = await api("/login", {
+      method: "POST",
+      body: JSON.stringify({ username: f.username.value, password: f.password.value })
+    });
+    localStorage.setItem("token", r.token);
+    initApp();
   } catch (err) {
     aviso(err.message, true);
   }
@@ -48,6 +49,8 @@ async function handleLogin(e) {
 
 function handleLogout() {
   localStorage.removeItem("token");
+  destroyMap();
+  state = { tab: 0, places: [], prods: [], ind: {}, ruta: null };
   $("#app-header").style.display = "none";
   $("#nav").innerHTML = "";
   $("#v").innerHTML = vLogin();
@@ -57,13 +60,14 @@ function handleLogout() {
 
 // Renderizado principal
 function renderNav() {
-  $("#nav").innerHTML = TABS.map((t, i) => 
+  $("#nav").innerHTML = TABS.map((t, i) =>
     `<button class="${i === state.tab ? "on" : ""}" data-tab="${i}">${t}</button>`
   ).join("");
 }
 
 function render() {
   renderNav();
+  window.remarketTab = TABS[state.tab]; // lo lee chatbot.js para dar contexto
   const vistas = [
     () => vRegistrar(state.places),
     () => vClasificar(state.prods),
@@ -114,7 +118,7 @@ function bindEvents() {
             kg: +f.kg.value,
             estado: f.estado.value,
             vence: f.vence.value || null,
-            donante_id: +f.don.value
+            donante_id: f.don.value // UUID: se envía como texto (antes: +f.don.value daba NaN)
           })
         });
         return "Producto registrado.";
@@ -143,8 +147,8 @@ function bindEvents() {
             nombre: f.nombre.value,
             tipo: f.tipo.value,
             direccion: f.direccion.value,
-            personas: +f.personas.value || 0,
-            capacidad_kg: +f.cap.value || 0,
+            personas: Math.round(+f.personas.value) || 0,
+            capacidad_kg: Math.round(+f.cap.value) || 0,
             frio: f.frio.checked,
             necesidades: nec
           })
@@ -180,7 +184,7 @@ function bindEvents() {
   // Entregar producto
   document.querySelectorAll(".btn-entregar").forEach(btn => {
     btn.onclick = () => {
-      const id = btn.dataset.id;
+      const id = btn.dataset.id; // UUID como texto
       runAccion(async () => {
         await api(`/productos/${id}/entregar`, { method: "POST" });
         return "Entrega registrada.";
