@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>ReMarket 2.0 · Logística de recuperación</title>
+  <title>ReMarket 2.0 · Economía Circular de Productos</title>
   
   <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@600;800&family=Public+Sans:wght@400;500;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
@@ -11,23 +11,73 @@
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="/static/js/chatbot.js" defer></script>
-  <!-- Cargamos el módulo principal ES6 -->
   <script type="module" src="/static/js/app.js"></script>
 </head>
 <body>
+
+  <!-- Encabezado de la Plataforma -->
   <header id="app-header" style="display:none">
     <div class="header-content">
-      <h1>ReMarket 2.0</h1>
-      <p>Recuperación, clasificación y distribución de productos de primera necesidad. Donantes, operador logístico y organizaciones beneficiarias.</p>
+      <h1 style="color: var(--bright-green);">♻️ ReMarket 2.0</h1>
+      <p>Plataforma inteligente para la recuperación, clasificación y distribución de mermas de primera necesidad.</p>
     </div>
     <button class="b danger s" id="btn-logout">Cerrar sesión</button>
   </header>
 
+  <!-- Hero Central estilo NotebookLM -->
+  <section class="notebooklm-hero">
+    <span class="notebooklm-badge">Plataforma ODS 12 · Economía Circular</span>
+    <h1>ReMarket 2.0</h1>
+    <p class="description">
+      Sistema inteligente de gestión logística que conecta supermercados y comercios con albergues, comedores comunitarios y consumidores locales para rescatar productos de primera necesidad antes de su desperdicio.
+    </p>
+
+    <!-- Tarjetas Interactivas de Accesos Rápidos -->
+    <div class="hub-grid">
+      <div class="hub-card" onclick="document.querySelector('#nav').scrollIntoView({behavior: 'smooth'})">
+        <div class="icon">🛒</div>
+        <h3>Módulo B2C · Descuentos</h3>
+        <p>Venta de proximidad con 30% a 70% de descuento en bienes de primera necesidad.</p>
+      </div>
+
+      <div class="hub-card" onclick="document.querySelector('#nav').scrollIntoView({behavior: 'smooth'})">
+        <div class="icon">🤝</div>
+        <h3>Módulo B2B · Donaciones</h3>
+        <p>Distribución 100% gratuita para albergues y organizaciones comunitarias.</p>
+      </div>
+
+      <div class="hub-card" onclick="document.querySelector('#nav').scrollIntoView({behavior: 'smooth'})">
+        <div class="icon">🚚</div>
+        <h3>Ruteo Algorítmico VRP</h3>
+        <p>Optimización vial con matrices OSRM y ventanas horarias de atención.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- Navegación de pestañas dinámicas (Registrar, Clasificar, Rutas, Dashboard) -->
   <nav id="nav"></nav>
   <div id="msg" role="status"></div>
   
   <main id="v">
-    <p>Verificando sesión…</p>
+    <p>Cargando datos y matriz vial de prueba…</p>
   </main>
+
+  <!-- Animación Minimalista en Línea Recta: Fábrica -> Camión -> Casa -->
+  <footer class="truck-animation-bar">
+    <div class="truck-track">
+      <!-- Origen: Donante / Fábrica -->
+      <span class="node-icon" title="Centro de Origen / Retailer">🏭</span>
+      
+      <!-- Carretera en línea recta -->
+      <div class="road-line"></div>
+      
+      <!-- Camioncito animado de transporte -->
+      <div class="moving-truck" title="Ruta Logística ReMarket">🚚</div>
+      
+      <!-- Destino: Beneficiario / Casa -->
+      <span class="node-icon" title="Albergue / Hogar Beneficiario">🏡</span>
+    </div>
+  </footer>
+
 </body>
 </html>

@@ -183,7 +183,7 @@ small{color:var(--mu)}.fx{display:flex;gap:8px;flex-wrap:wrap;align-items:center
     position: absolute;
     left: 40px;
     top: 50%;
-    transform: translateY(-70%);
+    transform: translateY(-70%) scaleX(-1);
     z-index: 3;
     font-size: 26px;
     animation: conducir 6s linear infinite;
