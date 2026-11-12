@@ -1,20 +1,20 @@
-import { esc, GEOAPIFY_API_KEY, aviso } from './config.js';
+import { esc, GEOAPIFY_API_KEY, aviso, COLORES_RUTA } from './config.js';
 
 let map = null;
-let markerCamion = null;
+let camiones = [];
 let timerCamion = null;
 
-// Detiene el bucle de la simulación y quita el camión. Debe llamarse ANTES de map.remove().
+// Detiene la simulación y quita los camiones. Debe llamarse ANTES de map.remove().
 function detenerSimulacion() {
   if (timerCamion) {
     clearTimeout(timerCamion);
     timerCamion = null;
   }
-  if (markerCamion && map) map.removeLayer(markerCamion);
-  markerCamion = null;
+  if (map) camiones.forEach(c => map.removeLayer(c.marker));
+  camiones = [];
 }
 
-export function initMap(places, ruta) {
+export function initMap(places, plan) {
   detenerSimulacion();
   if (map) {
     map.remove();
@@ -44,67 +44,76 @@ export function initMap(places, ruta) {
       .addTo(map);
   });
 
-  if (ruta) {
-    const geoJsonLayer = L.geoJSON(ruta.geometria, { style: { color: "#2a62c9", weight: 5, opacity: .85 } }).addTo(map);
-    ruta.paradas.forEach((s, i) => {
-      L.marker([s.lat, s.lng], {
-        icon: L.divIcon({ className: "n", html: `<span>${i + 1}</span>`, iconSize: [26, 26] })
-      }).bindPopup(`${s.tipo}: ${esc(s.nombre)}`).addTo(map);
+  if (plan && plan.rutas.length) {
+    const capas = [];
+    plan.rutas.forEach((ru, k) => {
+      const color = COLORES_RUTA[k % COLORES_RUTA.length];
+      const nombre = ru.vehiculo ? ru.vehiculo.nombre : "Plan anterior";
+      if (ru.geometria) {
+        capas.push(L.geoJSON(ru.geometria, { style: { color, weight: 5, opacity: .85 } })
+          .bindTooltip(esc(nombre), { sticky: true }).addTo(map));
+      }
+      ru.paradas.forEach((s, i) => {
+        if (s.lat == null || s.lng == null) return;   // rutas antiguas del seeder no guardan coordenadas
+        L.marker([s.lat, s.lng], {
+          icon: L.divIcon({ className: "n", html: `<span style="background:${color}">${i + 1}</span>`, iconSize: [26, 26] })
+        }).bindPopup(`${esc(nombre)}<br>${s.tipo}: ${esc(s.nombre)}`).addTo(map);
+      });
     });
-    map.fitBounds(geoJsonLayer.getBounds().pad(.15));
+    if (capas.length) map.fitBounds(L.featureGroup(capas).getBounds().pad(.15));
+    else if (bounds.length) map.fitBounds(bounds, { padding: [30, 30] });
   } else if (bounds.length) {
     map.fitBounds(bounds, { padding: [30, 30] });
   }
 }
 
-export function simularRecorrido(ruta) {
-  if (!map || !ruta?.geometria?.coordinates) {
-    aviso("Primero debes planificar una ruta para ver la simulación.", true);
+export function simularRecorrido(plan) {
+  const rutas = (plan?.rutas || []).filter(r => r.geometria?.coordinates?.length > 1);
+  if (!map || !rutas.length) {
+    aviso("Primero debes planificar rutas para ver la simulación.", true);
     return;
   }
   detenerSimulacion(); // evita dos animaciones simultáneas
 
-  const todas = ruta.geometria.coordinates.map(c => [c[1], c[0]]);
-  if (todas.length < 2) return;
+  const TICKS = 300, MS = 100; // ~30 s; todos los camiones terminan a la vez, cada uno a su ritmo
+  camiones = rutas.map(r => {
+    const coords = r.geometria.coordinates.map(c => [c[1], c[0]]);
+    const marker = L.marker(coords[0], {
+      icon: L.divIcon({
+        className: "camion-animado",
+        html: '<div class="camion-emoji" style="font-size:28px">🚚</div>',
+        iconSize: [30, 30],
+        iconAnchor: [15, 15]
+      })
+    }).addTo(map);
+    return { coords, marker, prev: 0 };
+  });
 
-  // La geometría puede tener miles de puntos: se reduce a ~300 pasos para que el movimiento sea fluido.
-  const paso = Math.max(1, Math.floor(todas.length / 300));
-  const coords = todas.filter((_, i) => i % paso === 0);
-  coords.push(todas[todas.length - 1]);
-  const intervalo = 30000 / coords.length; // ~30 s en total
-
-  markerCamion = L.marker(coords[0], {
-    icon: L.divIcon({
-      className: "camion-animado",
-      html: '<div id="camion-emoji" style="font-size:28px">🚚</div>',
-      iconSize: [30, 30],
-      iconAnchor: [15, 15]
-    })
-  }).addTo(map);
-
-  let i = 0;
+  let t = 0;
   const animar = () => {
     // Si se cambió de pestaña (mapa destruido) o se detuvo, el bucle termina solo.
-    if (!map || !markerCamion) return;
-    if (i >= coords.length - 1) {
-      aviso("¡Simulación de ruta completada!");
+    if (!map || !camiones.length) return;
+    if (t >= TICKS) {
+      aviso("¡Simulación de rutas completada!");
       timerCamion = null;
       return;
     }
-    const a = coords[i];
-    const b = coords[i + 1];
-    markerCamion.setLatLng(b);
-
-    const angulo = Math.atan2(b[1] - a[1], b[0] - a[0]) * 180 / Math.PI;
-    const emoji = document.getElementById("camion-emoji");
-    if (emoji) emoji.style.transform = `rotate(${angulo - 90}deg)`;
-
-    map.panTo(b, { animate: false });
-    i++;
-    timerCamion = setTimeout(animar, intervalo);
+    t++;
+    camiones.forEach(c => {
+      const i = Math.round(t / TICKS * (c.coords.length - 1));
+      const a = c.coords[c.prev], b = c.coords[i];
+      c.marker.setLatLng(b);
+      if (a[0] !== b[0] || a[1] !== b[1]) {
+        const angulo = Math.atan2(b[1] - a[1], b[0] - a[0]) * 180 / Math.PI;
+        const el = c.marker.getElement()?.querySelector(".camion-emoji");
+        if (el) el.style.transform = `rotate(${angulo - 90}deg)`;
+      }
+      c.prev = i;
+    });
+    timerCamion = setTimeout(animar, MS);
   };
 
-  aviso("Iniciando simulación del recorrido...");
+  aviso("Iniciando simulación de la flota...");
   animar();
 }
 

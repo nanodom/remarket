@@ -106,6 +106,17 @@ def asegurar_admin(db):
         print("[i] Usuario administrador inicial creado.")
 
 
+from fastapi import Depends, HTTPException, Request   # agrega Depends
+
+ROLES_GESTION = ("Admin", "Administrador", "Operador Logistico")
+
+def requiere_rol(*permitidos):
+    def dep(u: dict = Depends(usuario_actual)):
+        if not set(u.get("roles", [])) & set(permitidos):
+            raise HTTPException(403, "No tienes permisos para esta acción")
+        return u
+    return dep
+
 if __name__ == "__main__":
     import getpass
     import sys

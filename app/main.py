@@ -1,6 +1,5 @@
 import os
 from contextlib import asynccontextmanager
-from datetime import date, timedelta
 from pathlib import Path
 from uuid import UUID
 
@@ -12,12 +11,16 @@ from pydantic import BaseModel, Field
 from sqlalchemy import inspect, select
 
 from . import auth, chat, logic, routing
-from .models import Base, Place, Producto, Ruta, SessionLocal, Usuario, ahora, engine
+from datetime import date, time, timedelta
+from pydantic import BaseModel, Field, model_validator
+from sqlalchemy.exc import IntegrityError
+from .models import Base, Place, Producto, Ruta, SessionLocal, Usuario, Vehiculo, ahora, engine
 from .security import verificar_ip_abuseipdb
 
 NOMINATIM = os.getenv("NOMINATIM_URL", "https://nominatim.openstreetmap.org")
 NOMINATIM_UA = os.getenv("NOMINATIM_UA", "ReMarket/2.0 (contacto@tudominio.cl)")
 
+GESTION = auth.requiere_rol(*auth.ROLES_GESTION)
 
 def get_db():
     with SessionLocal() as db:
@@ -235,6 +238,52 @@ def entregar(pid: UUID, db=Depends(get_db)):
 
 # ------------------------------------------------------------------ Rutas
 
+class VehiculoIn(BaseModel):
+    nombre: str = Field(min_length=1, max_length=100)
+    patente: str | None = Field(default=None, max_length=20)
+    capacidad_kg: int = Field(gt=0, le=50_000)
+    tiene_frio: bool = False
+    costo_km: float = Field(ge=0, le=100_000)
+    costo_fijo: float = Field(default=0, ge=0, le=10_000_000)
+    turno_inicio: time = time(8, 0)
+    turno_fin: time = time(18, 0)
+    activo: bool = True
+
+    @model_validator(mode="after")
+    def _turno(self):
+        if self.turno_fin <= self.turno_inicio:
+            raise ValueError("El fin del turno debe ser posterior al inicio")
+        return self
+
+
+def veh_out(v):
+    return {"id": str(v.id), "nombre": v.nombre, "patente": v.patente or "",
+            "capacidad_kg": v.capacidad_kg, "tiene_frio": bool(v.tiene_frio),
+            "costo_km": float(v.costo_km or 0), "costo_fijo": float(v.costo_fijo or 0),
+            "turno_inicio": v.turno_inicio.strftime("%H:%M"),
+            "turno_fin": v.turno_fin.strftime("%H:%M"), "activo": bool(v.activo)}
+
+
+def _datos_vehiculo(d: VehiculoIn) -> dict:
+    datos = d.model_dump()
+    datos["patente"] = (d.patente or "").strip().upper() or None
+    return datos
+
+
+def _commit_vehiculo(db):
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(409, "Ya existe un vehículo con esa patente")
+
+
+def _en_ruta(db, vid) -> bool:
+    """¿Tiene productos En ruta asignados a una de sus rutas?"""
+    return db.scalars(
+        select(Producto.id).join(Ruta, Producto.ruta_id == Ruta.id)
+        .where(Ruta.vehiculo_id == vid, Producto.status == "En ruta").limit(1)).first() is not None
+
 @api.post("/rutas/planificar")
 async def planificar(db=Depends(get_db)):
     items = db.scalars(select(Producto).where(
@@ -336,10 +385,52 @@ async def add_security_headers(request: Request, call_next):
     )
     return response
 
+# ------------------------------------------------------------------ Flota
+
+@api.get("/vehiculos")
+def listar_vehiculos(db=Depends(get_db)):
+    return [veh_out(v) for v in db.scalars(select(Vehiculo).order_by(Vehiculo.nombre))]
+
+
+@api.post("/vehiculos", status_code=201, dependencies=[Depends(GESTION)])
+def crear_vehiculo(d: VehiculoIn, db=Depends(get_db)):
+    v = Vehiculo(**_datos_vehiculo(d))
+    db.add(v)
+    _commit_vehiculo(db)
+    return veh_out(v)
+
+
+@api.put("/vehiculos/{vid}", dependencies=[Depends(GESTION)])
+def editar_vehiculo(vid: UUID, d: VehiculoIn, db=Depends(get_db)):
+    v = db.get(Vehiculo, vid)
+    if not v:
+        raise HTTPException(404, "Vehículo no encontrado")
+    if not d.activo and _en_ruta(db, vid):
+        raise HTTPException(409, "No se puede desactivar: tiene productos En ruta")
+    for k, val in _datos_vehiculo(d).items():
+        setattr(v, k, val)
+    _commit_vehiculo(db)
+    return veh_out(v)
+
+
+@api.delete("/vehiculos/{vid}", dependencies=[Depends(GESTION)])
+def borrar_vehiculo(vid: UUID, db=Depends(get_db)):
+    v = db.get(Vehiculo, vid)
+    if not v:
+        raise HTTPException(404, "Vehículo no encontrado")
+    if _en_ruta(db, vid):
+        raise HTTPException(409, "No se puede eliminar: tiene productos En ruta")
+    if db.scalars(select(Ruta.id).where(Ruta.vehiculo_id == vid).limit(1)).first():
+        # Tiene historial: se desactiva para no perder la trazabilidad de rutas e indicadores.
+        v.activo = False
+        db.commit()
+        return {"mensaje": "Tiene rutas en el historial: se desactivó en lugar de eliminarse."}
+    db.delete(v)
+    db.commit()
+    return {"mensaje": "Vehículo eliminado."}
 
 # Archivos estáticos y ruta raíz
 app.mount("/static", StaticFiles(directory=Path(__file__).resolve().parent / "../frontend/static"), name="static")
-
 
 @app.get("/")
 def read_index():

@@ -1,4 +1,4 @@
-import { CAT, esc, clp, f1, stc } from './config.js';
+import { CAT, COLORES_RUTA, esc, clp, f1, stc } from './config.js';
 
 export function vLogin() {
   return `<div class="box login-wrapper">
@@ -88,22 +88,51 @@ export function vAsignar(places, prods) {
   </div>`;
 }
 
-export function vRutas(ruta) {
-  const r = ruta;
+export function vRutas(plan) {
+  const r = plan;
+  const kpis = r ? [
+    ["Vehículos en ruta", r.rutas.length],
+    ["Distancia total", f1(r.km) + " km"],
+    ["Jornada estimada", Math.round(r.minutos) + " min"],
+    ["Costo total", clp(r.costo)],
+    ["Costo por retiro", clp(r.costo_por_retiro)],
+    ["Ahorro vs. un viaje por envío", f1(r.ahorro_km) + " km"]
+  ] : [];
+  const color = i => COLORES_RUTA[i % COLORES_RUTA.length];
+
   return `<div class="box">
-    <h3>Planificación de ruta</h3>
-    <p>Los tiempos y distancias salen de la red vial real (OSRM). Se ordenan primero los retiros y luego las entregas, volviendo al centro de acopio.</p>
+    <h3>Planificación de rutas</h3>
+    <p>El optimizador reparte los envíos entre los vehículos activos según capacidad, cadena de frío, costo por km y duración del turno. Los tiempos y distancias salen de la red vial real (OSRM). Los envíos que no caben quedan como Asignados.</p>
     <div class="fx">
-      <button class="b" id="btn-planificar">Planificar ruta con productos asignados</button>
-      ${r ? `<button class="b s" id="btn-simular">Simular recorrido del camión</button>` : ""}
+      <button class="b" id="btn-planificar">Planificar rutas con productos asignados</button>
+      ${r ? `<button class="b s" id="btn-simular">Simular recorrido de la flota</button>` : ""}
     </div>
   </div>
-  ${r ? `<div class="g g5 mt">${[["Distancia", f1(r.km) + " km"], ["Tiempo estimado", Math.round(r.minutos) + " min"], ["Costo total", clp(r.costo)], ["Costo por retiro", clp(r.costo_por_retiro)], ["Ahorro vs. orden simple", f1(r.ahorro_km) + " km"]].map(a => `<div class="box kpi"><b>${a[1]}</b><span>${a[0]}</span></div>`).join("")}</div>` : ""}
+  ${r ? `<div class="g g5 mt">${kpis.map(a => `<div class="box kpi"><b>${a[1]}</b><span>${a[0]}</span></div>`).join("")}</div>` : ""}
   <div class="box mt">
-    <div id="map" role="img" aria-label="Mapa con puntos de retiro, entrega y ruta"></div>
-    <p><small>Verde: donantes · azul: beneficiarios · negro: centro de acopio. ${r ? (r.fuente === "osrm" ? "Ruta calculada por calle con OSRM." : "OSRM no está disponible: se muestran distancias estimadas en línea recta.") : "Planifica una ruta para verla en el mapa."}</small></p>
-    ${r ? `<div class="sc"><table><tr><th>Parada</th><th>Tipo</th><th>Lugar</th></tr>${r.paradas.map((p, i) => `<tr><td>${i + 1}</td><td>${p.tipo}</td><td>${esc(p.nombre)}</td></tr>`).join("")}</table></div>` : ""}
-  </div>`;
+    <div id="map" role="img" aria-label="Mapa con puntos de retiro, entrega y rutas por vehículo"></div>
+    <p><small>Verde: donantes · azul: beneficiarios · negro: centro de acopio. ${r ? (r.fuente === "osrm" ? "Rutas calculadas por calle con OSRM." : "OSRM no está disponible: se muestran distancias estimadas en línea recta.") : "Planifica rutas para verlas en el mapa."}</small></p>
+  </div>
+  ${r ? `<div class="box sc mt">
+    <h3>Rutas por vehículo</h3>
+    <table>
+      <tr><th></th><th>Vehículo</th><th>Retiros</th><th>km</th><th>Min</th><th>Costo</th><th>Carga máx.</th><th>Ahorro</th></tr>
+      ${r.rutas.map((x, i) => `<tr>
+        <td><span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:${color(i)}"></span></td>
+        <td>${x.vehiculo ? esc(x.vehiculo.nombre) + `<br><small>${esc(x.vehiculo.patente)}${x.vehiculo.tiene_frio ? " · frío" : ""}</small>` : "Plan anterior (sin vehículo)"}</td>
+        <td>${x.retiros}</td><td>${f1(x.km)}</td><td>${Math.round(x.minutos)}</td><td>${clp(x.costo)}</td>
+        <td>${x.carga_max_kg} kg${x.vehiculo ? ` / ${x.vehiculo.capacidad_kg} (${x.utilizacion}%)` : ""}</td>
+        <td>${f1(x.ahorro_km)} km</td>
+      </tr>`).join("")}
+    </table>
+  </div>
+  ${r.rutas.map((x, i) => `<details class="box mt">
+    <summary><b>Paradas · ${x.vehiculo ? esc(x.vehiculo.nombre) : "Plan anterior"}</b></summary>
+    <div class="sc"><table>
+      <tr><th>#</th><th>Min desde salida</th><th>Tipo</th><th>Lugar</th><th>kg</th><th>A bordo</th></tr>
+      ${x.paradas.map((p, j) => `<tr><td>${j + 1}</td><td>${p.min ?? "—"}</td><td>${p.tipo}</td><td>${esc(p.nombre)}</td><td>${p.kg ?? "—"}</td><td>${p.carga ?? "—"}</td></tr>`).join("")}
+    </table></div>
+  </details>`).join("")}` : ""}`;
 }
 
 export function vSeg(prods, places) {
@@ -140,7 +169,7 @@ export function vInd(ind, prods) {
       <table>
         <tr><th>Indicador</th><th>Fórmula</th></tr>
         <tr><td>Km recorridos</td><td>Σ distancia real por calle de las rutas, km</td></tr>
-        <tr><td>Costo por retiro</td><td>(km × ${clp(k.costo_km)} + retiros × ${clp(k.fijo_retiro)}) ÷ retiros, CLP</td></tr>
+        <tr><td>Costo por retiro</td><td>Σ (km × tarifa del vehículo + costo fijo del vehículo + retiros × ${clp(k.fijo_retiro)}) ÷ retiros, CLP</td></tr>
         <tr><td>Tiempo de entrega</td><td>promedio (entrega − solicitud), horas</td></tr>
         <tr><td>Kg recuperados</td><td>Σ kg de productos entregados</td></tr>
         <tr><td>Beneficiarios</td><td>organizaciones distintas con entrega y suma de sus personas</td></tr>

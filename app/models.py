@@ -6,11 +6,11 @@ con la columna real de la base de datos.
 """
 import os
 import uuid
-from datetime import date, datetime, timezone
+from datetime import date, datetime, time, timezone
 
 from dotenv import load_dotenv
 from sqlalchemy import (JSON, Boolean, Column, Date, DateTime, ForeignKey, Integer,
-                        Numeric, String, Table, Text, Uuid, create_engine)
+                        Numeric, String, Table, Text, Time, Uuid, create_engine)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, sessionmaker
 
@@ -151,3 +151,16 @@ class Usuario(Base):
     estado_activo: Mapped[bool | None] = mapped_column(Boolean, default=True)
     fecha_creacion: Mapped[datetime | None] = mapped_column(DateTime, default=ahora)
     roles: Mapped[list[Rol]] = relationship(secondary=usuario_rol, lazy="selectin")
+
+class Vehiculo(Base):
+    __tablename__ = "vehiculo"
+    id: Mapped[uuid.UUID] = mapped_column("uuid_vehiculo", Uuid, primary_key=True, default=uuid.uuid4)
+    nombre: Mapped[str] = mapped_column(String(100))
+    patente: Mapped[str | None] = mapped_column(String(20), unique=True)
+    capacidad_kg: Mapped[int] = mapped_column(Integer)
+    tiene_frio: Mapped[bool] = mapped_column(Boolean, default=False)
+    costo_km: Mapped[float] = mapped_column(num(10, 2), default=450)
+    costo_fijo: Mapped[float] = mapped_column(num(10, 2), default=0)
+    turno_inicio: Mapped[time] = mapped_column(Time, default=time(8, 0))
+    turno_fin: Mapped[time] = mapped_column(Time, default=time(18, 0))
+    activo: Mapped[bool] = mapped_column(Boolean, default=True)

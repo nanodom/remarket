@@ -79,4 +79,10 @@ INSERT INTO producto (uuid_producto, nombre, categoria, peso_kg, fecha_vencimien
      '44444444-4444-4444-a444-222222222222', '44444444-4444-4444-a444-444444444444', NULL, NOW() - INTERVAL '1 hour', NULL)
 ON CONFLICT (uuid_producto) DO NOTHING;
 
+INSERT INTO vehiculo (uuid_vehiculo, nombre, patente, capacidad_kg, tiene_frio, costo_km, costo_fijo, turno_inicio, turno_fin) VALUES
+    ('77777777-7777-4777-a777-111111111111', 'Camión refrigerado', 'AB-CD-12', 1500, true, 650, 8000, '08:00', '18:00'),
+    ('77777777-7777-4777-a777-222222222222', 'Furgón mediano', 'EF-GH-34', 600, false, 450, 3500, '08:00', '18:00'),
+    ('77777777-7777-4777-a777-333333333333', 'Camioneta', 'IJ-KL-56', 250, false, 320, 2000, '09:00', '17:00')
+ON CONFLICT (uuid_vehiculo) DO NOTHING;
+
 COMMIT;

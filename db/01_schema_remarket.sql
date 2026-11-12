@@ -80,6 +80,26 @@ CREATE TABLE IF NOT EXISTS rol_permiso (
     PRIMARY KEY (uuid_rol, uuid_permiso)
 );
 
+CREATE TABLE IF NOT EXISTS vehiculo (
+    uuid_vehiculo UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    nombre VARCHAR(100) NOT NULL,
+    patente VARCHAR(20) UNIQUE,
+    capacidad_kg INT NOT NULL CHECK (capacidad_kg > 0),
+    tiene_frio BOOLEAN NOT NULL DEFAULT FALSE,
+    costo_km NUMERIC(10, 2) NOT NULL DEFAULT 450,
+    costo_fijo NUMERIC(10, 2) NOT NULL DEFAULT 0,
+    turno_inicio TIME NOT NULL DEFAULT '08:00',
+    turno_fin TIME NOT NULL DEFAULT '18:00',
+    activo BOOLEAN NOT NULL DEFAULT TRUE,
+    CHECK (turno_fin > turno_inicio)
+);
+
+ALTER TABLE ruta
+    ADD COLUMN IF NOT EXISTS uuid_vehiculo UUID REFERENCES vehiculo(uuid_vehiculo) ON DELETE SET NULL,
+    ADD COLUMN IF NOT EXISTS plan_id UUID;
+
+CREATE INDEX IF NOT EXISTS idx_ruta_vehiculo ON ruta(uuid_vehiculo);
+
 -- ============ Ampliación que necesita la aplicación ============
 
 -- lugar: tipo de actor, personas atendidas y categorías que necesita
@@ -121,8 +141,3 @@ UPDATE producto SET status_logistico = 'Disponible' WHERE status_logistico IS NU
 CREATE INDEX IF NOT EXISTS idx_producto_status ON producto(status_logistico);
 CREATE INDEX IF NOT EXISTS idx_producto_ruta ON producto(uuid_ruta);
 CREATE INDEX IF NOT EXISTS idx_ruta_creada ON ruta(creada DESC);
-
--- IMPORTANTE si ya tenías filas en `lugar`: todas quedaron como 'donante'.
--- Ajusta la base y los beneficiarios, por ejemplo:
---   UPDATE lugar SET tipo = 'base' WHERE nombre = 'Centro de acopio';
---   UPDATE lugar SET tipo = 'beneficiario' WHERE nombre IN ('...');
