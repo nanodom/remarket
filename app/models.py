@@ -71,6 +71,8 @@ class Ruta(Base):
     fuente: Mapped[str] = mapped_column(String(20), default="osrm")
     geometria: Mapped[dict | None] = mapped_column(JSONType)
     paradas: Mapped[list | None] = mapped_column(JSONType)
+    vehiculo_id: Mapped[uuid.UUID | None] = mapped_column("uuid_vehiculo", Uuid, ForeignKey("vehiculo.uuid_vehiculo", ondelete="SET NULL"))
+    plan_id: Mapped[uuid.UUID | None] = mapped_column(Uuid)
 
 
 class Producto(Base):

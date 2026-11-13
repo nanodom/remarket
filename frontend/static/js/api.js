@@ -6,7 +6,6 @@ export async function api(endpoint, options = {}) {
     ...(options.headers || {})
   };
 
-  // Antes, las peticiones GET (sin `options`) se enviaban sin cabeceras ni token.
   const response = await fetch("/api" + endpoint, { ...options, headers });
 
   if (response.status === 401 && endpoint !== "/login") {
@@ -25,11 +24,12 @@ export async function api(endpoint, options = {}) {
 
 // Carga simultánea de datos principales
 export async function cargarDatosAPI() {
-  const [places, prods, ind, ruta] = await Promise.all([
+  const [places, prods, ind, ruta, vehiculos] = await Promise.all([
     api("/places"),
     api("/productos"),
     api("/indicadores"),
-    api("/rutas/ultima")
+    api("/rutas/ultima"),
+    api("/vehiculos")
   ]);
-  return { places, prods, ind, ruta };
+  return { places, prods, ind, ruta, vehiculos };
 }

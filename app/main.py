@@ -1,26 +1,31 @@
+import ipaddress
+import math
 import os
 from contextlib import asynccontextmanager
+from datetime import date, time, timedelta
 from pathlib import Path
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import httpx
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
-from sqlalchemy import inspect, select
-
-from . import auth, chat, logic, routing
-from datetime import date, time, timedelta
 from pydantic import BaseModel, Field, model_validator
+from sqlalchemy import inspect, select
 from sqlalchemy.exc import IntegrityError
+
+from . import auth, chat, logic, routing, routing_vrp
 from .models import Base, Place, Producto, Ruta, SessionLocal, Usuario, Vehiculo, ahora, engine
 from .security import verificar_ip_abuseipdb
 
 NOMINATIM = os.getenv("NOMINATIM_URL", "https://nominatim.openstreetmap.org")
 NOMINATIM_UA = os.getenv("NOMINATIM_UA", "ReMarket/2.0 (contacto@tudominio.cl)")
+# Solo confiar en X-Forwarded-For si hay un proxy inverso propio delante (TRUST_PROXY=1).
+TRUST_PROXY = os.getenv("TRUST_PROXY", "0") == "1"
+RUTAS_DOCS = ("/docs", "/redoc", "/openapi.json")
 
 GESTION = auth.requiere_rol(*auth.ROLES_GESTION)
+
 
 def get_db():
     with SessionLocal() as db:
@@ -64,6 +69,12 @@ def seed(db):
         ("Lácteos próximos a vencer", P, 60, "Próximo a vencer", 2, 0), ("Pan del día", P, 25, "Bueno", 1, 1),
         ("Arroz y fideos", N, 140, "Regular", 180, 2), ("Detergente y jabón", H, 45, "Bueno", 365, 0),
         ("Chaquetas de temporada", A, 55, "Bueno", 900, 3)]])
+    db.add_all([
+        Vehiculo(nombre="Camión refrigerado", patente="AB-CD-12", capacidad_kg=1500, tiene_frio=True,
+                 costo_km=650, costo_fijo=8000),
+        Vehiculo(nombre="Furgón mediano", patente="EF-GH-34", capacidad_kg=600, costo_km=450, costo_fijo=3500),
+        Vehiculo(nombre="Camioneta", patente="IJ-KL-56", capacidad_kg=250, costo_km=320, costo_fijo=2000),
+    ])
     db.commit()
 
 
@@ -81,12 +92,15 @@ async def lifespan(_):
 async def chequear_reputacion_ip(request: Request):
     """Dependencia de FastAPI para bloquear IPs reportadas en AbuseIPDB (se usa en el login)."""
     client_ip = request.client.host if request.client else ""
+    if TRUST_PROXY:
+        forwarded_for = request.headers.get("X-Forwarded-For")
+        if forwarded_for:
+            client_ip = forwarded_for.split(",")[0].strip()
 
-    forwarded_for = request.headers.get("X-Forwarded-For")
-    if forwarded_for:
-        client_ip = forwarded_for.split(",")[0].strip()
-
-    if client_ip in ["127.0.0.1", "localhost", "::1", ""]:
+    try:
+        if ipaddress.ip_address(client_ip).is_private:   # loopback, red de Docker, LAN
+            return True
+    except ValueError:
         return True
 
     resultado = await verificar_ip_abuseipdb(client_ip)
@@ -133,6 +147,24 @@ class ProductoIn(BaseModel):
     donante_id: UUID
 
 
+class VehiculoIn(BaseModel):
+    nombre: str = Field(min_length=1, max_length=100)
+    patente: str | None = Field(default=None, max_length=20)
+    capacidad_kg: int = Field(gt=0, le=50_000)
+    tiene_frio: bool = False
+    costo_km: float = Field(ge=0, le=100_000)
+    costo_fijo: float = Field(default=0, ge=0, le=10_000_000)
+    turno_inicio: time = time(8, 0)
+    turno_fin: time = time(18, 0)
+    activo: bool = True
+
+    @model_validator(mode="after")
+    def _turno(self):
+        if self.turno_fin <= self.turno_inicio:
+            raise ValueError("El fin del turno debe ser posterior al inicio")
+        return self
+
+
 def place_out(p):
     return {"id": str(p.id), "nombre": p.nombre, "tipo": p.tipo, "lat": p.lat, "lng": p.lng,
             "direccion": p.direccion or "", "personas": p.personas or 0,
@@ -147,6 +179,14 @@ def prod_out(p):
             "donante_id": str(p.donante_id) if p.donante_id else None,
             "destino_id": str(p.destino_id) if p.destino_id else None,
             "status": p.status or "Disponible"}
+
+
+def veh_out(v):
+    return {"id": str(v.id), "nombre": v.nombre, "patente": v.patente or "",
+            "capacidad_kg": v.capacidad_kg, "tiene_frio": bool(v.tiene_frio),
+            "costo_km": float(v.costo_km or 0), "costo_fijo": float(v.costo_fijo or 0),
+            "turno_inicio": v.turno_inicio.strftime("%H:%M"),
+            "turno_fin": v.turno_fin.strftime("%H:%M"), "activo": bool(v.activo)}
 
 
 # ------------------------------------------------------------------ Autenticación
@@ -236,33 +276,7 @@ def entregar(pid: UUID, db=Depends(get_db)):
     return prod_out(p)
 
 
-# ------------------------------------------------------------------ Rutas
-
-class VehiculoIn(BaseModel):
-    nombre: str = Field(min_length=1, max_length=100)
-    patente: str | None = Field(default=None, max_length=20)
-    capacidad_kg: int = Field(gt=0, le=50_000)
-    tiene_frio: bool = False
-    costo_km: float = Field(ge=0, le=100_000)
-    costo_fijo: float = Field(default=0, ge=0, le=10_000_000)
-    turno_inicio: time = time(8, 0)
-    turno_fin: time = time(18, 0)
-    activo: bool = True
-
-    @model_validator(mode="after")
-    def _turno(self):
-        if self.turno_fin <= self.turno_inicio:
-            raise ValueError("El fin del turno debe ser posterior al inicio")
-        return self
-
-
-def veh_out(v):
-    return {"id": str(v.id), "nombre": v.nombre, "patente": v.patente or "",
-            "capacidad_kg": v.capacidad_kg, "tiene_frio": bool(v.tiene_frio),
-            "costo_km": float(v.costo_km or 0), "costo_fijo": float(v.costo_fijo or 0),
-            "turno_inicio": v.turno_inicio.strftime("%H:%M"),
-            "turno_fin": v.turno_fin.strftime("%H:%M"), "activo": bool(v.activo)}
-
+# ------------------------------------------------------------------ Flota
 
 def _datos_vehiculo(d: VehiculoIn) -> dict:
     datos = d.model_dump()
@@ -284,108 +298,6 @@ def _en_ruta(db, vid) -> bool:
         select(Producto.id).join(Ruta, Producto.ruta_id == Ruta.id)
         .where(Ruta.vehiculo_id == vid, Producto.status == "En ruta").limit(1)).first() is not None
 
-@api.post("/rutas/planificar")
-async def planificar(db=Depends(get_db)):
-    items = db.scalars(select(Producto).where(
-        Producto.status == "Asignado",
-        Producto.donante_id.is_not(None),
-        Producto.destino_id.is_not(None))).all()
-    if not items:
-        raise HTTPException(400, "No hay productos asignados para planificar")
-    base = db.scalars(select(Place).where(Place.tipo == "base")).first()
-    if not base:
-        raise HTTPException(400, "Falta registrar la base logística")
-    lug = {p.id: p for p in db.scalars(select(Place))}
-    ids_d = sorted({p.donante_id for p in items}, key=str)
-    ids_b = sorted({p.destino_id for p in items}, key=str)
-
-    sin_coord = [lug[i].nombre for i in (base.id, *ids_d, *ids_b) if lug[i].lat is None or lug[i].lng is None]
-    if sin_coord:
-        raise HTTPException(400, "Lugares sin coordenadas: " + ", ".join(sin_coord))
-
-    xy = lambda i: (lug[i].lat, lug[i].lng)
-    r = await routing.planificar((base.lat, base.lng), [xy(i) for i in ids_d], [xy(i) for i in ids_b])
-
-    def parada(tipo, i):
-        return {"tipo": tipo, "id": str(i), "nombre": lug[i].nombre, "lat": lug[i].lat, "lng": lug[i].lng}
-
-    # El camión sale y vuelve a la base: se muestra al inicio y al final del recorrido.
-    inicio = parada("base", base.id)
-    paradas = ([inicio]
-               + [parada("retiro", ids_d[i]) for i in r["retiros"]]
-               + [parada("entrega", ids_b[i]) for i in r["entregas"]]
-               + [inicio])
-
-    costo = r["km"] * routing.COSTO_KM + len(ids_d) * routing.FIJO_RETIRO
-    ruta = Ruta(km=round(r["km"], 2), minutos=round(r["minutos"]), costo=round(costo, 2),
-                retiros=len(ids_d), ahorro_km=round(r["ahorro_km"], 2), fuente=r["fuente"],
-                geometria=r["geometria"], paradas=paradas)
-    db.add(ruta)
-    db.flush()
-    for p in items:
-        p.status, p.ruta_id = "En ruta", ruta.id
-    db.commit()
-    return {"id": str(ruta.id), "km": ruta.km, "minutos": ruta.minutos, "costo": ruta.costo,
-            "costo_por_retiro": ruta.costo / len(ids_d), "ahorro_km": ruta.ahorro_km,
-            "fuente": ruta.fuente, "geometria": ruta.geometria, "paradas": paradas}
-
-
-@api.get("/rutas/ultima")
-def ultima_ruta(db=Depends(get_db)):
-    """Última ruta que todavía tiene productos En ruta; si ya se entregó todo, no hay ruta activa."""
-    r = db.scalars(select(Ruta).order_by(Ruta.creada.desc())).first()
-    if not r:
-        return None
-    activa = db.scalars(select(Producto.id).where(
-        Producto.ruta_id == r.id, Producto.status == "En ruta").limit(1)).first()
-    if activa is None:
-        return None
-    costo = r.costo or 0
-    return {"id": str(r.id), "km": r.km or 0, "minutos": r.minutos or 0, "costo": costo,
-            "retiros": r.retiros or 0, "costo_por_retiro": costo / r.retiros if r.retiros else 0,
-            "ahorro_km": r.ahorro_km or 0, "fuente": r.fuente,
-            "geometria": r.geometria, "paradas": r.paradas or []}
-
-
-# ------------------------------------------------------------------ Indicadores
-
-@api.get("/indicadores")
-def indicadores(db=Depends(get_db)):
-    rutas = db.scalars(select(Ruta)).all()
-    ent = db.scalars(select(Producto).where(Producto.status == "Entregado")).all()
-    retiros = sum(r.retiros or 0 for r in rutas)
-    horas = [(p.entregado - p.creado).total_seconds() / 3600 for p in ent if p.entregado and p.creado]
-    benef = {p.destino_id for p in ent if p.destino_id}
-    personas = sum((db.get(Place, b).personas or 0) for b in benef if db.get(Place, b))
-    return {"km_recorridos": round(sum(r.km or 0 for r in rutas), 1),
-            "costo_por_retiro": round(sum(r.costo or 0 for r in rutas) / retiros) if retiros else 0,
-            "tiempo_entrega_horas": round(sum(horas) / len(horas), 1) if horas else 0,
-            "kg_recuperados": float(sum(p.kg or 0 for p in ent)),
-            "beneficiarios_org": len(benef), "beneficiarios_personas": personas,
-            "costo_km": routing.COSTO_KM, "fijo_retiro": routing.FIJO_RETIRO}
-
-
-app.include_router(api)
-app.include_router(chat.router, dependencies=[Depends(auth.usuario_actual)])
-
-
-@app.middleware("http")
-async def add_security_headers(request: Request, call_next):
-    response = await call_next(request)
-    response.headers["X-Content-Type-Options"] = "nosniff"
-    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
-    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
-
-    response.headers["Content-Security-Policy"] = (
-        "default-src 'self' https://unpkg.com https://fonts.googleapis.com https://fonts.gstatic.com; "
-        "style-src 'self' 'unsafe-inline' https://unpkg.com https://fonts.googleapis.com; "
-        "script-src 'self' 'unsafe-inline' https://unpkg.com; "
-        "img-src 'self' data: blob: https://*.openstreetmap.org https://tile.openstreetmap.org https://*.geoapify.com;"
-        "connect-src 'self' https://*.geoapify.com;"
-    )
-    return response
-
-# ------------------------------------------------------------------ Flota
 
 @api.get("/vehiculos")
 def listar_vehiculos(db=Depends(get_db)):
@@ -429,8 +341,216 @@ def borrar_vehiculo(vid: UUID, db=Depends(get_db)):
     db.commit()
     return {"mensaje": "Vehículo eliminado."}
 
+
+# ------------------------------------------------------------------ Rutas
+
+def a_solver(v: Vehiculo) -> routing_vrp.Vehiculo:
+    mins = lambda t: t.hour * 60 + t.minute
+    return routing_vrp.Vehiculo(
+        id=str(v.id), cap_kg=int(v.capacidad_kg), frio=bool(v.tiene_frio),
+        costo_km=float(v.costo_km), costo_fijo=float(v.costo_fijo),
+        turno=(mins(v.turno_inicio), mins(v.turno_fin)))
+
+
+def _armar_envios(items, lug, flota_db):
+    """Agrupa productos Asignados en envíos (donante, destino, necesita frío) y los parte por capacidad.
+    Devuelve (envios, omitidos) con omitidos = [(producto, motivo)] que ningún vehículo puede llevar."""
+    cap_max = max(v.capacidad_kg for v in flota_db)
+    cap_frio = max((v.capacidad_kg for v in flota_db if v.tiene_frio), default=0)
+    grupos = {}
+    for p in items:
+        grupos.setdefault((p.donante_id, p.destino_id, logic._cat(p)[1]), []).append(p)
+
+    envios, omitidos = [], []
+    for (did, bid, frio), prods in grupos.items():
+        cap = cap_frio if frio else cap_max
+        if cap == 0:
+            omitidos += [(p, "requiere cadena de frío y no hay vehículo refrigerado activo") for p in prods]
+            continue
+        cajas = []   # first-fit decreasing
+        for p in sorted(prods, key=lambda x: -(x.kg or 0)):
+            kg = math.ceil(p.kg or 0)
+            if kg > cap:
+                omitidos.append((p, f"pesa {kg} kg y supera la capacidad del mayor vehículo ({cap} kg)"))
+                continue
+            for c in cajas:
+                if c["kg"] + kg <= cap:
+                    c["kg"] += kg
+                    c["prods"].append(p)
+                    break
+            else:
+                cajas.append({"kg": kg, "prods": [p]})
+        for c in cajas:
+            envios.append(routing_vrp.Envio(
+                productos=c["prods"], kg=c["kg"], frio=frio,
+                prioridad=max(logic.score(p) for p in c["prods"]),
+                donante_id=did, destino_id=bid,
+                donante=(lug[did].lat, lug[did].lng), destino=(lug[bid].lat, lug[bid].lng)))
+    return envios, omitidos
+
+
+def _ruta_out(r, v):
+    paradas = r.paradas or []
+    carga_max = max((x.get("carga", 0) for x in paradas), default=0)
+    costo = float(r.costo or 0)
+    return {
+        "id": str(r.id),
+        "vehiculo": ({"id": str(v.id), "nombre": v.nombre, "patente": v.patente or "",
+                      "capacidad_kg": v.capacidad_kg, "tiene_frio": bool(v.tiene_frio)} if v else None),
+        "km": r.km or 0, "minutos": r.minutos or 0, "costo": costo, "retiros": r.retiros or 0,
+        "costo_por_retiro": costo / r.retiros if r.retiros else 0,
+        "ahorro_km": r.ahorro_km or 0, "fuente": r.fuente,
+        "geometria": r.geometria, "paradas": paradas,
+        "carga_max_kg": carga_max,
+        "utilizacion": round(carga_max / v.capacidad_kg * 100) if v and v.capacidad_kg else 0,
+    }
+
+
+def _plan_out(rs, vehs):
+    rutas = [_ruta_out(r, vehs.get(r.vehiculo_id)) for r in rs]
+    retiros = sum(x["retiros"] for x in rutas)
+    costo = sum(x["costo"] for x in rutas)
+    return {
+        "plan_id": str(rs[0].plan_id or rs[0].id), "rutas": rutas,
+        "km": round(sum(x["km"] for x in rutas), 2),
+        "minutos": max(x["minutos"] for x in rutas),          # jornada: los camiones van en paralelo
+        "costo": costo, "retiros": retiros,
+        "costo_por_retiro": costo / retiros if retiros else 0,
+        "ahorro_km": round(sum(x["ahorro_km"] for x in rutas), 2),
+        "fuente": "osrm" if all(x["fuente"] == "osrm" for x in rutas) else "estimado",
+    }
+
+
+@api.post("/rutas/planificar", dependencies=[Depends(GESTION)])
+async def planificar(db=Depends(get_db)):
+    items = db.scalars(select(Producto).where(
+        Producto.status == "Asignado",
+        Producto.donante_id.is_not(None),
+        Producto.destino_id.is_not(None))).all()
+    if not items:
+        raise HTTPException(400, "No hay productos asignados para planificar")
+    base = db.scalars(select(Place).where(Place.tipo == "base")).first()
+    if not base:
+        raise HTTPException(400, "Falta registrar la base logística")
+    flota_db = db.scalars(select(Vehiculo).where(Vehiculo.activo.is_(True)).order_by(Vehiculo.nombre)).all()
+    if not flota_db:
+        raise HTTPException(400, "No hay vehículos activos: registra al menos uno en Flota")
+
+    lug = {p.id: p for p in db.scalars(select(Place))}
+    ids = {base.id} | {p.donante_id for p in items} | {p.destino_id for p in items}
+    sin_coord = [lug[i].nombre for i in ids if lug[i].lat is None or lug[i].lng is None]
+    if sin_coord:
+        raise HTTPException(400, "Lugares sin coordenadas: " + ", ".join(sin_coord))
+
+    envios, omitidos = _armar_envios(items, lug, flota_db)
+    res = None
+    if envios:
+        res = await routing_vrp.planificar_flota((base.lat, base.lng), envios, [a_solver(v) for v in flota_db])
+    rutas_sol, omit_k = res if res else ([], [])
+    for k in omit_k:
+        omitidos += [(p, "no cabe en la flota o en la duración de los turnos") for p in envios[k].productos]
+
+    if not rutas_sol:
+        det = "; ".join(f"{p.nombre}: {m}" for p, m in omitidos[:3])
+        raise HTTPException(400, "Ningún envío pudo atenderse. " + det)
+
+    plan_id = uuid4()
+    nuevas = []
+    for r in rutas_sol:
+        v = flota_db[r["veh"]]            # la flota del solver conserva el orden de flota_db
+        paradas = []
+        for nodo, minuto, a_bordo in r["seq"]:
+            if nodo == 0:
+                tipo, pid, kg = "base", base.id, 0
+            else:
+                e = envios[(nodo - 1) // 2]
+                tipo, pid, kg = ("retiro", e.donante_id, e.kg) if nodo % 2 == 1 else ("entrega", e.destino_id, e.kg)
+            if paradas and paradas[-1]["tipo"] == tipo and paradas[-1]["id"] == str(pid):
+                paradas[-1]["kg"] += kg          # dos envíos al mismo lugar: una sola parada
+                paradas[-1]["carga"] = a_bordo
+                continue
+            paradas.append({"tipo": tipo, "id": str(pid), "nombre": lug[pid].nombre,
+                            "lat": lug[pid].lat, "lng": lug[pid].lng,
+                            "kg": kg, "carga": a_bordo, "min": minuto})
+        retiros = sum(1 for x in paradas if x["tipo"] == "retiro")
+        costo = r["km"] * float(v.costo_km) + float(v.costo_fijo) + retiros * routing.FIJO_RETIRO
+        ruta = Ruta(km=round(r["km"], 2), minutos=round(r["minutos"]), costo=round(costo, 2),
+                    retiros=retiros, ahorro_km=round(r["ahorro_km"], 2), fuente=r["fuente"],
+                    geometria=r["geometria"], paradas=paradas, vehiculo_id=v.id, plan_id=plan_id)
+        db.add(ruta)
+        db.flush()
+        for k in r["envios"]:
+            for p in envios[k].productos:
+                p.status, p.ruta_id = "En ruta", ruta.id
+        nuevas.append(ruta)
+    db.commit()
+
+    out = _plan_out(nuevas, {v.id: v for v in flota_db})
+    out["omitidos"] = [{"producto": p.nombre, "motivo": m} for p, m in omitidos]
+    return out
+
+
+@api.get("/rutas/ultima")
+def ultima_ruta(db=Depends(get_db)):
+    """Plan más reciente que todavía tiene rutas con productos En ruta (solo esas rutas)."""
+    activos = set(db.scalars(select(Producto.ruta_id).where(
+        Producto.status == "En ruta", Producto.ruta_id.is_not(None))).all())
+    if not activos:
+        return None
+    rs = db.scalars(select(Ruta).where(Ruta.id.in_(activos)).order_by(Ruta.creada.desc())).all()
+    primera = rs[0]
+    grupo = [r for r in rs if r.id == primera.id
+             or (primera.plan_id is not None and r.plan_id == primera.plan_id)]
+    vehs = {v.id: v for v in db.scalars(select(Vehiculo))}
+    return _plan_out(grupo, vehs)
+
+
+# ------------------------------------------------------------------ Indicadores
+
+@api.get("/indicadores")
+def indicadores(db=Depends(get_db)):
+    rutas = db.scalars(select(Ruta)).all()
+    ent = db.scalars(select(Producto).where(Producto.status == "Entregado")).all()
+    retiros = sum(r.retiros or 0 for r in rutas)
+    horas = [(p.entregado - p.creado).total_seconds() / 3600 for p in ent if p.entregado and p.creado]
+    benef = {p.destino_id for p in ent if p.destino_id}
+    personas = sum((db.get(Place, b).personas or 0) for b in benef if db.get(Place, b))
+    return {"km_recorridos": round(sum(r.km or 0 for r in rutas), 1),
+            "costo_por_retiro": round(sum(r.costo or 0 for r in rutas) / retiros) if retiros else 0,
+            "tiempo_entrega_horas": round(sum(horas) / len(horas), 1) if horas else 0,
+            "kg_recuperados": float(sum(p.kg or 0 for p in ent)),
+            "beneficiarios_org": len(benef), "beneficiarios_personas": personas,
+            "costo_km": routing.COSTO_KM, "fijo_retiro": routing.FIJO_RETIRO}
+
+
+# ------------------------------------------------------------------ Middleware y montaje
+# IMPORTANTE: include_router va DESPUÉS de definir todas las rutas de `api`;
+# FastAPI copia las rutas en ese momento y las que se agreguen luego no se registran.
+
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    # Swagger carga scripts desde jsdelivr: no se le aplica el CSP restrictivo de la app.
+    if not request.url.path.startswith(RUTAS_DOCS):
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self' https://unpkg.com https://fonts.googleapis.com https://fonts.gstatic.com; "
+            "style-src 'self' 'unsafe-inline' https://unpkg.com https://fonts.googleapis.com; "
+            "script-src 'self' 'unsafe-inline' https://unpkg.com; "
+            "img-src 'self' data: blob: https://*.openstreetmap.org https://tile.openstreetmap.org https://*.geoapify.com; "
+            "connect-src 'self' https://*.geoapify.com;"
+        )
+    return response
+
+
+app.include_router(api)
+app.include_router(chat.router, dependencies=[Depends(auth.usuario_actual)])
+
 # Archivos estáticos y ruta raíz
 app.mount("/static", StaticFiles(directory=Path(__file__).resolve().parent / "../frontend/static"), name="static")
+
 
 @app.get("/")
 def read_index():

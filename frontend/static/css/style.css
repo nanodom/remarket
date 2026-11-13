@@ -39,7 +39,7 @@ small{color:var(--mu)}.fx{display:flex;gap:8px;flex-wrap:wrap;align-items:center
     filter: drop-shadow(0 4px 6px rgba(0,0,0,0.4)); /* Le da una sombra al camión */
 }
 
-#camion-emoji {
+.camion-emoji {
     transform-origin: center center; /* Asegura que gire sobre su propio eje */
 }
 

@@ -2,13 +2,14 @@ services:
   server:
     build: .
     env_file:
-      - .env
+      - path: .env
+        required: false
     environment:
       # Con el driver psycopg (v3) el esquema debe ser postgresql+psycopg://
       DATABASE_URL: postgresql+psycopg://remarket:remarket@db:5432/remarket
       SEED_DEMO: "0"
       ADMIN_USER: "admin"
-      ADMIN_PASSWORD: "password123"
+      ADMIN_PASSWORD: "${ADMIN_PASSWORD:-password123}"
     ports:
       - "8000:8000"
     depends_on:

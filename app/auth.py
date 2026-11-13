@@ -12,7 +12,7 @@ import os
 import secrets
 import time
 
-from fastapi import HTTPException, Request
+from fastapi import Depends, HTTPException, Request
 from sqlalchemy import select
 
 from .models import Empleado, Rol, SessionLocal, Usuario
@@ -22,6 +22,9 @@ if not SECRET_KEY:
     SECRET_KEY = secrets.token_hex(32)
     print("[!] SECRET_KEY no está definida: se generó una temporal y las sesiones se pierden al reiniciar.")
 TOKEN_HORAS = int(os.getenv("TOKEN_HORAS", 8))
+
+# "Admin" es el rol que crea el seeder SQL; "Administrador" se mantiene por compatibilidad.
+ROLES_GESTION = ("Admin", "Administrador", "Operador Logistico")
 
 _SCRYPT = dict(n=2**14, r=8, p=1, dklen=32)
 
@@ -82,8 +85,16 @@ def usuario_actual(request: Request) -> dict:
         raise HTTPException(401, "Sesión inválida o expirada")
 
 
+def requiere_rol(*permitidos):
+    def dep(u: dict = Depends(usuario_actual)):
+        if not set(u.get("roles", [])) & set(permitidos):
+            raise HTTPException(403, "No tienes permisos para esta acción")
+        return u
+    return dep
+
+
 def crear_usuario(db, username: str, password: str, nombre: str = "Admin",
-                  apellido: str = "ReMarket", correo: str | None = None, rol: str = "Administrador"):
+                  apellido: str = "ReMarket", correo: str | None = None, rol: str = "Admin"):
     r = db.scalars(select(Rol).where(Rol.nombre_rol == rol)).first()
     if not r:
         r = Rol(nombre_rol=rol, descripcion=f"Rol {rol}")
@@ -105,17 +116,6 @@ def asegurar_admin(db):
         crear_usuario(db, os.getenv("ADMIN_USER", "admin"), pw)
         print("[i] Usuario administrador inicial creado.")
 
-
-from fastapi import Depends, HTTPException, Request   # agrega Depends
-
-ROLES_GESTION = ("Admin", "Administrador", "Operador Logistico")
-
-def requiere_rol(*permitidos):
-    def dep(u: dict = Depends(usuario_actual)):
-        if not set(u.get("roles", [])) & set(permitidos):
-            raise HTTPException(403, "No tienes permisos para esta acción")
-        return u
-    return dep
 
 if __name__ == "__main__":
     import getpass

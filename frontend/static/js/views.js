@@ -62,7 +62,7 @@ export function vClasificar(prods) {
     <div class="sc">
       <table>
         <tr><th>Producto</th><th>Categoría</th><th>kg</th><th>Estado</th><th>Vence en</th><th>Puntaje</th><th>Prioridad</th></tr>
-        ${prods.map(p => `<tr><td>${esc(p.nombre)}</td><td>${p.categoria}</td><td>${p.kg}</td><td>${p.estado}</td><td>${p.dias >= 999 ? "No vence" : p.dias + " d"}</td><td>${p.puntaje}</td><td><span class="tag ${p.prioridad}">${p.prioridad}</span></td></tr>`).join("")}
+        ${prods.map(p => `<tr><td>${esc(p.nombre)}</td><td>${esc(p.categoria)}</td><td>${p.kg}</td><td>${esc(p.estado)}</td><td>${p.dias >= 999 ? "No vence" : p.dias + " d"}</td><td>${p.puntaje}</td><td><span class="tag ${p.prioridad}">${p.prioridad}</span></td></tr>`).join("")}
       </table>
     </div>
     <p><small>Puntaje = peso de categoría (perecible 30, no perecible o higiene 20, abrigo 10) + urgencia por vencimiento (≤2 días: 15, ≤7 días: 8) + estado (próximo a vencer +10, regular −3). Alta ≥35, Media ≥20.</small></p>
@@ -82,9 +82,48 @@ export function vAsignar(places, prods) {
       <tr><th>Organización</th><th>Personas</th><th>Necesita</th><th>Frío</th><th>Carga / capacidad</th></tr>
       ${places.filter(p => p.tipo === "beneficiario").map(r => {
         const c = prods.filter(p => p.destino_id === r.id && p.status !== "Entregado").reduce((a, p) => a + p.kg, 0);
-        return `<tr><td>${esc(r.nombre)}</td><td>${r.personas}</td><td>${r.necesidades.join(", ")}</td><td>${r.frio ? "Sí" : "No"}</td><td>${c} /${r.capacidad_kg} kg</td></tr>`;
+        return `<tr><td>${esc(r.nombre)}</td><td>${r.personas}</td><td>${esc(r.necesidades.join(", "))}</td><td>${r.frio ? "Sí" : "No"}</td><td>${c} /${r.capacidad_kg} kg</td></tr>`;
       }).join("")}
     </table>
+  </div>`;
+}
+
+export function vFlota(vehs, edit) {
+  const v = edit || { nombre: "", patente: "", capacidad_kg: 1000, tiene_frio: false,
+    costo_km: 450, costo_fijo: 0, turno_inicio: "08:00", turno_fin: "18:00", activo: true };
+  return `<div class="g g2">
+    <form class="box" id="form-vehiculo" data-id="${edit ? esc(edit.id) : ""}">
+      <h3>${edit ? "Editar vehículo" : "Agregar vehículo"}</h3>
+      <label>Nombre<input name="nombre" required maxlength="100" value="${esc(v.nombre)}" placeholder="Ej: Furgón 1"></label>
+      <label>Patente<input name="patente" maxlength="20" value="${esc(v.patente || "")}"></label>
+      <label>Capacidad (kg)<input name="cap" type="number" min="1" step="1" required value="${v.capacidad_kg}"></label>
+      <label>Costo por km (CLP)<input name="ckm" type="number" min="0" step="1" required value="${v.costo_km}"></label>
+      <label>Costo fijo por uso (CLP)<input name="cfijo" type="number" min="0" step="1" required value="${v.costo_fijo}"></label>
+      <label>Inicio de turno<input name="ini" type="time" required value="${v.turno_inicio}"></label>
+      <label>Fin de turno<input name="fin" type="time" required value="${v.turno_fin}"></label>
+      <label class="ck"><input type="checkbox" name="frio" ${v.tiene_frio ? "checked" : ""}>Cuenta con cadena de frío</label>
+      <label class="ck"><input type="checkbox" name="activo" ${v.activo ? "checked" : ""}>Activo</label>
+      <div class="fx">
+        <button class="b">${edit ? "Guardar cambios" : "Agregar vehículo"}</button>
+        ${edit ? `<button type="button" class="b s" id="btn-cancelar-veh">Cancelar</button>` : ""}
+      </div>
+    </form>
+    <div class="box sc">
+      <h3>Flota (${vehs.filter(x => x.activo).length} activos de ${vehs.length})</h3>
+      <table>
+        <tr><th>Vehículo</th><th>Cap.</th><th>Frío</th><th>Costo</th><th>Turno</th><th>Estado</th><th></th></tr>
+        ${vehs.map(x => `<tr>
+          <td>${esc(x.nombre)}<br><small>${esc(x.patente)}</small></td>
+          <td>${x.capacidad_kg} kg</td>
+          <td>${x.tiene_frio ? "Sí" : "No"}</td>
+          <td>${clp(x.costo_km)}/km<br><small>+ ${clp(x.costo_fijo)} fijo</small></td>
+          <td>${x.turno_inicio}–${x.turno_fin}</td>
+          <td><span class="tag ${x.activo ? "Disponible" : "Media"}">${x.activo ? "Activo" : "Inactivo"}</span></td>
+          <td class="fx"><button class="b s btn-editar-veh" data-id="${esc(x.id)}">Editar</button>
+              <button class="b s btn-borrar-veh" data-id="${esc(x.id)}">Eliminar</button></td>
+        </tr>`).join("") || `<tr><td colspan="7">Sin vehículos registrados.</td></tr>`}
+      </table>
+    </div>
   </div>`;
 }
 
@@ -126,11 +165,11 @@ export function vRutas(plan) {
       </tr>`).join("")}
     </table>
   </div>
-  ${r.rutas.map((x, i) => `<details class="box mt">
+  ${r.rutas.map(x => `<details class="box mt">
     <summary><b>Paradas · ${x.vehiculo ? esc(x.vehiculo.nombre) : "Plan anterior"}</b></summary>
     <div class="sc"><table>
       <tr><th>#</th><th>Min desde salida</th><th>Tipo</th><th>Lugar</th><th>kg</th><th>A bordo</th></tr>
-      ${x.paradas.map((p, j) => `<tr><td>${j + 1}</td><td>${p.min ?? "—"}</td><td>${p.tipo}</td><td>${esc(p.nombre)}</td><td>${p.kg ?? "—"}</td><td>${p.carga ?? "—"}</td></tr>`).join("")}
+      ${x.paradas.map((p, j) => `<tr><td>${j + 1}</td><td>${p.min ?? "—"}</td><td>${esc(p.tipo)}</td><td>${esc(p.nombre)}</td><td>${p.kg ?? "—"}</td><td>${p.carga ?? "—"}</td></tr>`).join("")}
     </table></div>
   </details>`).join("")}` : ""}`;
 }
@@ -147,7 +186,7 @@ export function vSeg(prods, places) {
         <td>${esc(P(p.donante_id).nombre)}</td>
         <td>${p.destino_id ? esc(P(p.destino_id).nombre) : "—"}</td>
         <td><span class="tag ${stc(p.status)}">${p.status}</span></td>
-        <td>${p.status === "En ruta" ? `<button class="b s btn-entregar" data-id="${p.id}">Marcar entregado</button>` : ""}</td>
+        <td>${p.status === "En ruta" ? `<button class="b s btn-entregar" data-id="${esc(p.id)}">Marcar entregado</button>` : ""}</td>
       </tr>`).join("")}
     </table>
   </div>`;

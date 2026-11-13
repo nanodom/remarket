@@ -1,16 +1,12 @@
-import { TABS, $, aviso } from './config.js';
+import { TABS, $, aviso, f1 } from './config.js';
 import { api, cargarDatosAPI } from './api.js';
 import { initMap, simularRecorrido, destroyMap } from './map.js';
-import { vLogin, vRegistrar, vClasificar, vAsignar, vRutas, vSeg, vInd } from './views.js';
+import { vLogin, vRegistrar, vClasificar, vAsignar, vFlota, vRutas, vSeg, vInd } from './views.js';
 
-// Estado global de la aplicación
-let state = {
-  tab: 0,
-  places: [],
-  prods: [],
-  ind: {},
-  ruta: null
-};
+const estadoInicial = () => ({
+  tab: 0, places: [], prods: [], ind: {}, ruta: null, vehiculos: [], editVeh: null
+});
+let state = estadoInicial();
 
 // Carga inicial y actualización de estado
 async function actualizarEstado() {
@@ -35,7 +31,6 @@ async function handleLogin(e) {
   const f = e.target;
   try {
     aviso("");
-    // Validación real contra la tabla `usuario` (hash + estado_activo) en el backend.
     const r = await api("/login", {
       method: "POST",
       body: JSON.stringify({ username: f.username.value, password: f.password.value })
@@ -50,7 +45,7 @@ async function handleLogin(e) {
 function handleLogout() {
   localStorage.removeItem("token");
   destroyMap();
-  state = { tab: 0, places: [], prods: [], ind: {}, ruta: null };
+  state = estadoInicial();
   $("#app-header").style.display = "none";
   $("#nav").innerHTML = "";
   $("#v").innerHTML = vLogin();
@@ -68,10 +63,12 @@ function renderNav() {
 function render() {
   renderNav();
   window.remarketTab = TABS[state.tab]; // lo lee chatbot.js para dar contexto
+  // El orden debe coincidir con TABS en config.js
   const vistas = [
     () => vRegistrar(state.places),
     () => vClasificar(state.prods),
     () => vAsignar(state.places, state.prods),
+    () => vFlota(state.vehiculos, state.editVeh),
     () => vRutas(state.ruta),
     () => vSeg(state.prods, state.places),
     () => vInd(state.ind, state.prods)
@@ -79,7 +76,7 @@ function render() {
 
   $("#v").innerHTML = vistas[state.tab]();
 
-  if (state.tab === 3) {
+  if (TABS[state.tab] === "Rutas") {
     initMap(state.places, state.ruta);
   } else {
     destroyMap();
@@ -118,7 +115,7 @@ function bindEvents() {
             kg: +f.kg.value,
             estado: f.estado.value,
             vence: f.vence.value || null,
-            donante_id: f.don.value // UUID: se envía como texto (antes: +f.don.value daba NaN)
+            donante_id: f.don.value // UUID: se envía como texto
           })
         });
         return "Producto registrado.";
@@ -167,12 +164,60 @@ function bindEvents() {
     });
   }
 
+  // Flota
+  const formVeh = $("#form-vehiculo");
+  if (formVeh) {
+    formVeh.onsubmit = e => {
+      e.preventDefault();
+      const f = e.target, id = f.dataset.id;
+      runAccion(async () => {
+        await api(id ? `/vehiculos/${id}` : "/vehiculos", {
+          method: id ? "PUT" : "POST",
+          body: JSON.stringify({
+            nombre: f.nombre.value.trim(),
+            patente: f.patente.value.trim() || null,
+            capacidad_kg: Math.round(+f.cap.value),
+            costo_km: +f.ckm.value,
+            costo_fijo: +f.cfijo.value,
+            turno_inicio: f.ini.value,
+            turno_fin: f.fin.value,
+            tiene_frio: f.frio.checked,
+            activo: f.activo.checked
+          })
+        });
+        state.editVeh = null;
+        return id ? "Vehículo actualizado." : "Vehículo agregado.";
+      });
+    };
+  }
+
+  const btnCancelar = $("#btn-cancelar-veh");
+  if (btnCancelar) btnCancelar.onclick = () => { state.editVeh = null; render(); };
+
+  document.querySelectorAll(".btn-editar-veh").forEach(btn => {
+    btn.onclick = () => {
+      state.editVeh = state.vehiculos.find(v => v.id === btn.dataset.id) || null;
+      render();
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    };
+  });
+
+  document.querySelectorAll(".btn-borrar-veh").forEach(btn => {
+    btn.onclick = () => {
+      if (!confirm("¿Eliminar este vehículo?")) return;
+      runAccion(async () => (await api(`/vehiculos/${btn.dataset.id}`, { method: "DELETE" })).mensaje);
+    };
+  });
+
   // Planificar y Simular
   const btnPlanificar = $("#btn-planificar");
   if (btnPlanificar) {
     btnPlanificar.onclick = () => runAccion(async () => {
-      await api("/rutas/planificar", { method: "POST" });
-      return "Ruta planificada. Los productos quedaron En ruta.";
+      const r = await api("/rutas/planificar", { method: "POST" });
+      const om = r.omitidos.length
+        ? ` Sin atender (${r.omitidos.length}): ` + r.omitidos.slice(0, 3).map(o => `${o.producto} (${o.motivo})`).join("; ") + (r.omitidos.length > 3 ? "…" : ".")
+        : "";
+      return `Plan listo: ${r.rutas.length} vehículo(s), ${f1(r.km)} km.${om}`;
     });
   }
 
