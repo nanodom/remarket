@@ -1,10 +1,13 @@
 """Rutas reales con OSRM (tabla de matrices + ruta final). Si OSRM no responde, usa estimaciones."""
 import math
 import os
-
 import httpx
+from dotenv import load_dotenv
 
-OSRM_URL = os.getenv("OSRM_URL", "https://router.project-osrm.org")
+load_dotenv()
+
+OSRM_URL = (os.getenv("OSRM_URL") or "https://router.project-osrm.org").rstrip("/")
+
 COSTO_KM = float(os.getenv("COSTO_KM", 450))        # CLP por km
 FIJO_RETIRO = float(os.getenv("FIJO_RETIRO", 3500))  # CLP por retiro
 MIN_PARADA = float(os.getenv("MIN_PARADA", 10))      # minutos por parada
@@ -34,7 +37,7 @@ async def matrices(pts):
         fix = lambda m: [[1e9 if x is None else x for x in f] for f in m]
         return fix(j["durations"]), fix(j["distances"]), "osrm"
     except Exception as e:
-        print(f"[!] Error de OSRM (matrices): {e}")
+        print(f"[!] Error de OSRM (matrices) en {OSRM_URL}: {type(e).__name__}: {e}")
         dist = [[haversine(a, b) * 1300 for b in pts] for a in pts]
         return [[d / VEL_FALLBACK for d in f] for f in dist], dist, "estimado"
 
@@ -115,3 +118,15 @@ async def planificar(base, donantes, beneficiarios):
         # "osrm" solo si matrices Y geometría vinieron de OSRM; si no, se avisa como estimado.
         "fuente": "osrm" if fuente == "osrm" and fuente_geom == "osrm" else "estimado",
     }
+
+async def probar_osrm():
+    """Consulta mínima a OSRM. Devuelve (ok, detalle)."""
+    try:
+        async with httpx.AsyncClient(timeout=8) as c:
+            r = await c.get(f"{OSRM_URL}/route/v1/driving/-71.3394,-29.9575;-71.2511,-29.9125",
+                            params={"overview": "false"})
+        r.raise_for_status()
+        ok = r.json().get("code") == "Ok"
+        return ok, f"{OSRM_URL} respondió {r.status_code}"
+    except Exception as e:
+        return False, f"{OSRM_URL}: {type(e).__name__}: {e}"

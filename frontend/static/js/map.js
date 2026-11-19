@@ -2,16 +2,49 @@ import { esc, GEOAPIFY_API_KEY, aviso, COLORES_RUTA } from './config.js';
 
 let map = null;
 let camiones = [];
-let timerCamion = null;
+let raf = null;
+let pausado = false;
+let velocidad = 1;
+let ultimo = 0;     // timestamp del último frame
+let reloj = 0;      // ms simulados transcurridos (a velocidad 1×)
+let ultimoTexto = 0;
 
-// Detiene la simulación y quita los camiones. Debe llamarse ANTES de map.remove().
-function detenerSimulacion() {
-  if (timerCamion) {
-    clearTimeout(timerCamion);
-    timerCamion = null;
+const R = 6371000;
+const rad = x => x * Math.PI / 180;
+
+// Distancia en metros entre [lat, lng] y [lat, lng]
+function metros(a, b) {
+  const dl = rad(b[0] - a[0]), dn = rad(b[1] - a[1]);
+  const h = Math.sin(dl / 2) ** 2 + Math.cos(rad(a[0])) * Math.cos(rad(b[0])) * Math.sin(dn / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+
+// Posición a `d` metros del inicio: devuelve el índice del tramo y el punto interpolado
+function posicion(c, d) {
+  const { acum, coords } = c;
+  if (d <= 0) return { i: 0, p: coords[0] };
+  if (d >= c.total) return { i: coords.length - 1, p: coords[coords.length - 1] };
+  let lo = 0, hi = acum.length - 1;
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1;
+    if (acum[mid] <= d) lo = mid; else hi = mid;
   }
-  if (map) camiones.forEach(c => map.removeLayer(c.marker));
+  const f = (d - acum[lo]) / (acum[hi] - acum[lo] || 1);
+  const a = coords[lo], b = coords[hi];
+  return { i: lo, p: [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f] };
+}
+
+// Detiene la animación y quita camiones y rastros. Debe llamarse ANTES de map.remove().
+function detenerSimulacion() {
+  if (raf) {
+    cancelAnimationFrame(raf);
+    raf = null;
+  }
+  if (map) camiones.forEach(c => { map.removeLayer(c.marker); map.removeLayer(c.rastro); });
   camiones = [];
+  pausado = false;
+  const est = document.getElementById("sim-estado");
+  if (est) est.textContent = "";
 }
 
 export function initMap(places, plan) {
@@ -50,7 +83,8 @@ export function initMap(places, plan) {
       const color = COLORES_RUTA[k % COLORES_RUTA.length];
       const nombre = ru.vehiculo ? ru.vehiculo.nombre : "Plan anterior";
       if (ru.geometria) {
-        capas.push(L.geoJSON(ru.geometria, { style: { color, weight: 5, opacity: .85 } })
+        // Ruta base tenue: el rastro de la simulación se dibuja encima con opacidad completa
+        capas.push(L.geoJSON(ru.geometria, { style: { color, weight: 5, opacity: .4 } })
           .bindTooltip(esc(nombre), { sticky: true }).addTo(map));
       }
       ru.paradas.forEach((s, i) => {
@@ -67,7 +101,49 @@ export function initMap(places, plan) {
   }
 }
 
-export function simularRecorrido(plan) {
+function frame(now) {
+  raf = requestAnimationFrame(frame);
+  if (!map) { detenerSimulacion(); return; }
+  // Tope de 100 ms: si la pestaña estuvo en segundo plano no hay saltos bruscos
+  const dt = Math.min(now - ultimo, 100);
+  ultimo = now;
+  if (pausado) return;
+  reloj += dt * velocidad;
+
+  let activos = 0;
+  camiones.forEach(c => {
+    const prog = Math.min(1, reloj / c.durMs);
+    const { i, p } = posicion(c, prog * c.total);
+    c.marker.setLatLng(p);
+    c.rastro.setLatLngs([...c.coords.slice(0, i + 1), p]);
+
+    // Sentido de marcha: el emoji mira a la izquierda; se voltea si va hacia el este
+    const sig = c.coords[Math.min(i + 1, c.coords.length - 1)];
+    const dx = sig[1] - p[1];
+    if (dx !== 0 && (dx > 0) !== c.volteado) {
+      c.volteado = dx > 0;
+      const el = c.marker.getElement()?.querySelector(".camion-emoji");
+      if (el) el.style.transform = c.volteado ? "scaleX(-1)" : "";
+    }
+    c.pct = Math.round(prog * 100);
+    if (prog < 1) activos++;
+  });
+
+  if (now - ultimoTexto > 250 || !activos) {
+    ultimoTexto = now;
+    const est = document.getElementById("sim-estado");
+    if (est) est.innerHTML = camiones.map(c =>
+      `<small><b style="color:${c.color}">●</b> ${esc(c.nombre)}: ${c.pct}%</small>`).join(" · ");
+  }
+
+  if (!activos) {
+    cancelAnimationFrame(raf);
+    raf = null;
+    aviso("¡Simulación de rutas completada!");
+  }
+}
+
+export function simularRecorrido(plan, vel = 1) {
   const rutas = (plan?.rutas || []).filter(r => r.geometria?.coordinates?.length > 1);
   if (!map || !rutas.length) {
     aviso("Primero debes planificar rutas para ver la simulación.", true);
@@ -75,46 +151,54 @@ export function simularRecorrido(plan) {
   }
   detenerSimulacion(); // evita dos animaciones simultáneas
 
-  const TICKS = 300, MS = 100; // ~30 s; todos los camiones terminan a la vez, cada uno a su ritmo
+  // El recorrido más largo dura ~35 s a 1×; los demás, en proporción a sus minutos reales
+  const maxMin = Math.max(...rutas.map(r => r.minutos || 1));
+  const msPorMin = 35000 / maxMin;
+
   camiones = rutas.map(r => {
-    const coords = r.geometria.coordinates.map(c => [c[1], c[0]]);
+    const k = plan.rutas.indexOf(r);
+    const color = COLORES_RUTA[k % COLORES_RUTA.length];
+    const nombre = r.vehiculo ? r.vehiculo.nombre : "Vehículo";
+    const coords = r.geometria.coordinates.map(c => [c[1], c[0]]);   // GeoJSON [lng,lat] -> Leaflet [lat,lng]
+    const acum = [0];
+    for (let i = 1; i < coords.length; i++) acum.push(acum[i - 1] + metros(coords[i - 1], coords[i]));
+
     const marker = L.marker(coords[0], {
+      zIndexOffset: 1000,
       icon: L.divIcon({
         className: "camion-animado",
-        html: '<div class="camion-emoji" style="font-size:28px">🚚</div>',
+        html: `<div class="camion-wrap"><div class="camion-emoji">🚚</div><span class="camion-tag" style="background:${color}">${esc(nombre)}</span></div>`,
         iconSize: [30, 30],
         iconAnchor: [15, 15]
       })
     }).addTo(map);
-    return { coords, marker, prev: 0 };
+    const rastro = L.polyline([], { color, weight: 7, opacity: 1 }).addTo(map);
+
+    return {
+      coords, acum, total: acum[acum.length - 1] || 1, marker, rastro, color, nombre,
+      durMs: Math.max(3000, (r.minutos || 1) * msPorMin), volteado: false, pct: 0
+    };
   });
 
-  let t = 0;
-  const animar = () => {
-    // Si se cambió de pestaña (mapa destruido) o se detuvo, el bucle termina solo.
-    if (!map || !camiones.length) return;
-    if (t >= TICKS) {
-      aviso("¡Simulación de rutas completada!");
-      timerCamion = null;
-      return;
-    }
-    t++;
-    camiones.forEach(c => {
-      const i = Math.round(t / TICKS * (c.coords.length - 1));
-      const a = c.coords[c.prev], b = c.coords[i];
-      c.marker.setLatLng(b);
-      if (a[0] !== b[0] || a[1] !== b[1]) {
-        const angulo = Math.atan2(b[1] - a[1], b[0] - a[0]) * 180 / Math.PI;
-        const el = c.marker.getElement()?.querySelector(".camion-emoji");
-        if (el) el.style.transform = `rotate(${angulo - 90}deg)`;
-      }
-      c.prev = i;
-    });
-    timerCamion = setTimeout(animar, MS);
-  };
+  reloj = 0;
+  pausado = false;
+  velocidad = vel;
+  ultimo = performance.now();
+  aviso(plan.fuente === "osrm"
+    ? "Simulando recorrido por calles reales…"
+    : "Simulando con ruta ESTIMADA en línea recta: OSRM no respondió, el camión no sigue las calles.", plan.fuente !== "osrm");
+  raf = requestAnimationFrame(frame);
+}
 
-  aviso("Iniciando simulación de la flota...");
-  animar();
+// Devuelve true si quedó en pausa
+export function alternarPausa() {
+  if (!raf) return false;   // no hay simulación en curso
+  pausado = !pausado;
+  return pausado;
+}
+
+export function cambiarVelocidad(v) {
+  velocidad = v || 1;
 }
 
 export function destroyMap() {

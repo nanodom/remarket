@@ -1,6 +1,6 @@
 import { TABS, $, aviso, f1 } from './config.js';
 import { api, cargarDatosAPI } from './api.js';
-import { initMap, simularRecorrido, destroyMap } from './map.js';
+import { initMap, simularRecorrido, alternarPausa, cambiarVelocidad, destroyMap } from './map.js';
 import { vLogin, vRegistrar, vClasificar, vAsignar, vFlota, vRutas, vSeg, vInd } from './views.js';
 
 const estadoInicial = () => ({
@@ -223,8 +223,19 @@ function bindEvents() {
 
   const btnSimular = $("#btn-simular");
   if (btnSimular) {
-    btnSimular.onclick = () => simularRecorrido(state.ruta);
+    btnSimular.onclick = () => {
+      $("#btn-pausa").textContent = "⏸ Pausar";
+      simularRecorrido(state.ruta, +$("#sim-vel").value);
+    };
   }
+
+  const btnPausa = $("#btn-pausa");
+  if (btnPausa) {
+    btnPausa.onclick = () => { btnPausa.textContent = alternarPausa() ? "▶ Reanudar" : "⏸ Pausar"; };
+  }
+
+  const selVel = $("#sim-vel");
+  if (selVel) selVel.onchange = () => cambiarVelocidad(+selVel.value);
 
   // Entregar producto
   document.querySelectorAll(".btn-entregar").forEach(btn => {

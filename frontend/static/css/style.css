@@ -32,15 +32,16 @@ button:disabled{opacity:.6;cursor:wait}
 .n span{display:grid;place-items:center;width:26px;height:26px;border-radius:50%;background:var(--ac2);color:#fff;font:700 12px "Public Sans",sans-serif;border:2px solid #fff}
 small{color:var(--mu)}.fx{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
 .login-wrapper{max-width:400px;margin:80px auto;padding:20px}
-.camion-animado {
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    filter: drop-shadow(0 4px 6px rgba(0,0,0,0.4)); /* Le da una sombra al camión */
-}
-
+.camion-animado { background: none; border: 0; }
+.camion-wrap { position: relative; width: 30px; height: 30px; }
 .camion-emoji {
-    transform-origin: center center; /* Asegura que gire sobre su propio eje */
+    font-size: 28px; line-height: 30px; text-align: center;
+    filter: drop-shadow(0 3px 4px rgba(0,0,0,.4));
+}
+.camion-tag {
+    position: absolute; top: 30px; left: 50%; transform: translateX(-50%);
+    color: #fff; font: 600 11px "Public Sans", system-ui, sans-serif;
+    padding: 1px 7px; border-radius: 99px; white-space: nowrap;
 }
 
 :root {

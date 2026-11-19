@@ -144,14 +144,19 @@ export function vRutas(plan) {
     <p>El optimizador reparte los envíos entre los vehículos activos según capacidad, cadena de frío, costo por km y duración del turno. Los tiempos y distancias salen de la red vial real (OSRM). Los envíos que no caben quedan como Asignados.</p>
     <div class="fx">
       <button class="b" id="btn-planificar">Planificar rutas con productos asignados</button>
-      ${r ? `<button class="b s" id="btn-simular">Simular recorrido de la flota</button>` : ""}
+      ${r ? `<button class="b s" id="btn-simular">▶ Simular recorrido</button>
+      <button class="b s" id="btn-pausa">⏸ Pausar</button>
+      <label style="margin:0;display:flex;gap:6px;align-items:center">Velocidad
+        <select id="sim-vel" style="width:auto">
+          <option value="1">1×</option><option value="2">2×</option><option value="4">4×</option><option value="8">8×</option>
+        </select>
+      </label>` : ""}
     </div>
   </div>
-  ${r ? `<div class="g g5 mt">${kpis.map(a => `<div class="box kpi"><b>${a[1]}</b><span>${a[0]}</span></div>`).join("")}</div>` : ""}
-  <div class="box mt">
-    <div id="map" role="img" aria-label="Mapa con puntos de retiro, entrega y rutas por vehículo"></div>
-    <p><small>Verde: donantes · azul: beneficiarios · negro: centro de acopio. ${r ? (r.fuente === "osrm" ? "Rutas calculadas por calle con OSRM." : "OSRM no está disponible: se muestran distancias estimadas en línea recta.") : "Planifica rutas para verlas en el mapa."}</small></p>
-  </div>
+  ${r && r.fuente !== "osrm" ? `<div class="box mt" style="border-color:var(--er)">
+    <b>Las rutas se dibujan en línea recta.</b> OSRM no respondió, así que las distancias y tiempos son estimados.
+    Revisa <code>OSRM_URL</code> y la terminal del servidor.
+  </div>` : ""}
   ${r ? `<div class="box sc mt">
     <h3>Rutas por vehículo</h3>
     <table>
