@@ -75,14 +75,23 @@ function render() {
   ];
 
   $("#v").innerHTML = vistas[state.tab]();
+  bindEvents();
 
   if (TABS[state.tab] === "Rutas") {
-    initMap(state.places, state.ruta);
+    const mapContainer = document.createElement("div");
+    mapContainer.id = "map";
+    mapContainer.className = "mt";
+    mapContainer.setAttribute("aria-label", "Mapa de rutas");
+    $("#v").prepend(mapContainer);
+    try {
+      initMap(state.places, state.ruta);
+    } catch (e) {
+      destroyMap();
+      aviso(`No se pudo inicializar el mapa: ${e.message}`, true);
+    }
   } else {
     destroyMap();
   }
-
-  bindEvents();
 }
 
 // Delegación y vinculación de eventos
@@ -212,13 +221,22 @@ function bindEvents() {
   // Planificar y Simular
   const btnPlanificar = $("#btn-planificar");
   if (btnPlanificar) {
-    btnPlanificar.onclick = () => runAccion(async () => {
-      const r = await api("/rutas/planificar", { method: "POST" });
-      const om = r.omitidos.length
-        ? ` Sin atender (${r.omitidos.length}): ` + r.omitidos.slice(0, 3).map(o => `${o.producto} (${o.motivo})`).join("; ") + (r.omitidos.length > 3 ? "…" : ".")
-        : "";
-      return `Plan listo: ${r.rutas.length} vehículo(s), ${f1(r.km)} km.${om}`;
-    });
+    btnPlanificar.onclick = () => {
+      btnPlanificar.disabled = true;
+      btnPlanificar.textContent = "Planificando rutas…";
+      runAccion(async () => {
+        const r = await api("/rutas/planificar", { method: "POST" });
+        const om = r.omitidos.length
+          ? ` Sin atender (${r.omitidos.length}): ` + r.omitidos.slice(0, 3).map(o => `${o.producto} (${o.motivo})`).join("; ") + (r.omitidos.length > 3 ? "…" : ".")
+          : "";
+        return `Plan listo: ${r.rutas.length} vehículo(s), ${f1(r.km)} km.${om}`;
+      }).finally(() => {
+        if (btnPlanificar.isConnected) {
+          btnPlanificar.disabled = false;
+          btnPlanificar.textContent = "Planificar rutas con productos asignados";
+        }
+      });
+    };
   }
 
   const btnSimular = $("#btn-simular");

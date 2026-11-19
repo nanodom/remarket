@@ -1,3 +1,4 @@
 # Archivo de variables de entorno (no subir a repositorios)
 .env
 .env.*
+osrm-data/

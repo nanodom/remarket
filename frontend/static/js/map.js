@@ -1,4 +1,4 @@
-import { esc, GEOAPIFY_API_KEY, aviso, COLORES_RUTA } from './config.js';
+import { esc, aviso, COLORES_RUTA } from './config.js';
 
 let map = null;
 let camiones = [];
@@ -56,14 +56,9 @@ export function initMap(places, plan) {
 
   map = L.map("map").setView([-29.93, -71.3], 11);
 
-  const isRetina = L.Browser.retina;
-  const baseUrl = `https://maps.geoapify.com/v1/tile/osm-bright/{z}/{x}/{y}.png?apiKey=${GEOAPIFY_API_KEY}`;
-  const retinaUrl = `https://maps.geoapify.com/v1/tile/osm-bright/{z}/{x}/{y}@2x.png?apiKey=${GEOAPIFY_API_KEY}`;
-
-  L.tileLayer(isRetina ? retinaUrl : baseUrl, {
-    attribution: 'Powered by <a href="https://www.geoapify.com/" target="_blank">Geoapify</a> | © OpenStreetMap contributors',
-    maxZoom: 20,
-    id: "osm-bright"
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+    maxZoom: 19
   }).addTo(map);
 
   const COL = { base: "#111", donante: "#17795a", beneficiario: "#2a62c9" };

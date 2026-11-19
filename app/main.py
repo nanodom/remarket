@@ -540,7 +540,7 @@ async def add_security_headers(request: Request, call_next):
             "style-src 'self' 'unsafe-inline' https://unpkg.com https://fonts.googleapis.com; "
             "script-src 'self' 'unsafe-inline' https://unpkg.com; "
             "img-src 'self' data: blob: https://*.openstreetmap.org https://tile.openstreetmap.org https://*.geoapify.com; "
-            "connect-src 'self' https://*.geoapify.com;"
+            "connect-src 'self' https://unpkg.com https://*.geoapify.com;"
         )
     return response
 
