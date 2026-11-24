@@ -30,7 +30,45 @@ cd .. && docker compose up --build
 4. Costo = km × `COSTO_KM` + retiros × `FIJO_RETIRO` (variables de entorno, CLP).
 
 ## Endpoints
-`GET/POST /api/places` · `GET /api/geocode?q=` · `GET/POST /api/productos` · `POST /api/asignar` · `POST /api/rutas/planificar` · `POST /api/productos/{id}/entregar` · `GET /api/indicadores`
+`GET/POST /api/places` · `GET /api/geocode?q=` · `GET/POST /api/productos` · `GET /api/productos/certificado/{donante_id}` · `POST /api/asignar` · `POST /api/rutas/planificar` · `POST /api/productos/{id}/entregar` · `GET /api/indicadores`
+
+## Certificado de donación en PDF
+
+`GET /api/productos/certificado/{donante_id}` genera y descarga un PDF para un donante. La ruta está bajo el router autenticado: envía `Authorization: Bearer <token>`. El identificador debe ser un UUID válido. El endpoint busca al donante y reúne sus productos cuyo estado logístico sea `Entregado`; responde `404` si el donante no existe y `400` si no tiene productos entregados.
+
+La generación está implementada en `app/reports.py` con ReportLab. El endpoint de `app/main.py` prepara los datos, llama a `generar_pdf_certificado_bytes(...)` y devuelve los bytes con `Content-Type: application/pdf` y disposición de descarga. Para probarlo:
+
+1. Instala las dependencias con `pip install -r requirements.txt` e inicia la aplicación.
+2. Inicia sesión en `POST /api/login` para obtener un token.
+3. Consulta `GET /api/productos` y toma el `donante_id` de un producto con `status: "Entregado"`.
+4. Descarga el archivo:
+
+```bash
+curl -H "Authorization: Bearer <token>" \
+  -o certificado.pdf \
+  "http://localhost:8000/api/productos/certificado/<donante_id>"
+```
+
+El archivo debe comenzar con la firma `%PDF-`; ábrelo con un lector PDF para revisar el diseño y los datos. Si no existen productos entregados, completa el flujo de asignación, planificación y entrega antes de probar este endpoint.
+
+Para probar solo la generación del archivo, sin iniciar la API, ejecuta `python -m pytest tests/test_reports.py -q` (requiere `pytest`).
+
+### Estructura del documento
+
+1. **Encabezado:** título del certificado y referencia legal.
+2. **Datos generales:** folio, fecha de emisión, donante, beneficiario y operador logístico.
+3. **Resumen de métricas:** kilos rescatados, costo estimado, impuesto calculado y CO₂ estimado.
+4. **Detalle de productos:** nombre, categoría, peso, vencimiento e indicador de inspección.
+5. **Declaración final:** texto de respaldo y monto calculado.
+
+### Datos y consideraciones antes de usarlo oficialmente
+
+- Los valores de cálculo están fijos en `app/reports.py`: `$4.500 CLP/kg`, tasa del `40%` y `1,5 kg de CO₂/kg`. Son supuestos del reporte, no valores obtenidos de libros contables ni cálculos tributarios o ambientales verificados.
+- El endpoint usa RUT de donante y beneficiario, nombre del beneficiario y RUT del operador definidos actualmente en el código. Deben reemplazarse por datos verificados y asociados a cada operación antes de emitir documentos reales.
+- El indicador de inspección aparece como aprobado, pero el modelo de productos no registra una inspección individual. No debe interpretarse como evidencia sanitaria hasta integrar una fuente de inspección verificable.
+- El folio se genera aleatoriamente al descargar y no se persiste; descargar de nuevo produce otro folio. El reporte tampoco guarda una copia inmutable de los datos utilizados.
+- La redacción tributaria y las referencias legales del PDF deben ser revisadas por profesionales contables y legales. No usarlo como certificado oficial ni como comprobante de deducción o exención hasta validar el tratamiento aplicable y los datos de respaldo.
+- `reportlab` está declarado en `requirements.txt`; si se instala el proyecto con otro mecanismo, asegúrate de incluir esa dependencia.
 
 ## Antes de salir a producción
 - Los servidores públicos de OSM (tiles, Nominatim) y el demo de OSRM tienen límites de uso: usa instancias propias o un proveedor de mapas.

@@ -8,7 +8,7 @@ from uuid import UUID, uuid4
 
 import httpx
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import inspect, select
@@ -16,6 +16,7 @@ from sqlalchemy.exc import IntegrityError
 
 from . import auth, chat, logic, routing, routing_vrp
 from .models import Base, Place, Producto, Ruta, SessionLocal, Usuario, Vehiculo, ahora, engine
+from .reports import generar_pdf_certificado_bytes
 from .security import verificar_ip_abuseipdb
 
 NOMINATIM = os.getenv("NOMINATIM_URL", "https://nominatim.openstreetmap.org")
@@ -243,6 +244,49 @@ async def crear_place(d: PlaceIn, db=Depends(get_db)):
 @api.get("/productos")
 def listar_productos(db=Depends(get_db)):
     return sorted((prod_out(p) for p in db.scalars(select(Producto))), key=lambda x: -x["puntaje"])
+
+
+@api.get("/productos/certificado/{donante_id}")
+def descargar_certificado_tributario(donante_id: UUID, db=Depends(get_db)):
+    donante = db.get(Place, donante_id)
+    if not donante:
+        raise HTTPException(404, "Donante no encontrado")
+
+    entregados = db.scalars(
+        select(Producto).where(
+            Producto.donante_id == donante_id,
+            Producto.status == "Entregado",
+        )
+    ).all()
+    if not entregados:
+        raise HTTPException(
+            400,
+            "No hay productos entregados registrados para emitir certificado",
+        )
+
+    pdf_bytes = generar_pdf_certificado_bytes(
+        donante={"nombre": donante.nombre, "rut": "76.452.180-K"},
+        beneficiario={
+            "nombre": "Comedor Social Esperanza",
+            "rut": "65.129.400-2",
+        },
+        productos_entregados=[
+            {
+                **prod_out(producto),
+                "vence": producto.vence.isoformat() if producto.vence else "N/A",
+            }
+            for producto in entregados
+        ],
+    )
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": (
+                f"attachment; filename=Certificado_Donacion_{donante_id}.pdf"
+            )
+        },
+    )
 
 
 @api.post("/productos", status_code=201)

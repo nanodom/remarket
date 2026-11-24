@@ -7,3 +7,4 @@ ortools>=9.12
 pydantic>=2.7
 google-genai
 python-dotenv
+reportlab>=4.2
