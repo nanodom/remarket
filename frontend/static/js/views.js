@@ -191,7 +191,11 @@ export function vSeg(prods, places) {
         <td>${esc(P(p.donante_id).nombre)}</td>
         <td>${p.destino_id ? esc(P(p.destino_id).nombre) : "—"}</td>
         <td><span class="tag ${stc(p.status)}">${p.status}</span></td>
-        <td>${p.status === "En ruta" ? `<button class="b s btn-entregar" data-id="${esc(p.id)}">Marcar entregado</button>` : ""}</td>
+        <td>${p.status === "En ruta"
+          ? `<button class="b s btn-entregar" data-id="${esc(p.id)}">Marcar entregado</button>`
+          : p.status === "Entregado" && p.donante_id
+            ? `<button class="b s btn-certificado" data-donante-id="${esc(p.donante_id)}">Descargar certificado</button>`
+            : ""}</td>
       </tr>`).join("")}
     </table>
   </div>`;

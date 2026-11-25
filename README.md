@@ -42,6 +42,8 @@ Abre `http://localhost:8000/docs` para consultar las operaciones agrupadas por �
 
 La generación está implementada en `app/reports.py` con ReportLab. El endpoint de `app/main.py` prepara los datos, llama a `generar_pdf_certificado_bytes(...)` y devuelve los bytes con `Content-Type: application/pdf` y disposición de descarga. Para probarlo:
 
+En la pestaña **Seguimiento**, al registrar una entrega, la fila del producto cambia a `Entregado` y aparece el botón **Descargar certificado**. El botón descarga el certificado del donante; este incluye todos sus productos entregados hasta ese momento.
+
 1. Instala las dependencias con `pip install -r requirements.txt` e inicia la aplicación.
 2. Inicia sesión en `POST /api/login` para obtener un token.
 3. Consulta `GET /api/productos` y toma el `donante_id` de un producto con `status: "Entregado"`.

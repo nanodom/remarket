@@ -1,7 +1,7 @@
 import { TABS, $, aviso, f1 } from './config.js';
-import { api, cargarDatosAPI } from './api.js';
+import { api, cargarDatosAPI, descargarCertificado } from './api.js?v=certificados-1';
 import { initMap, simularRecorrido, alternarPausa, cambiarVelocidad, destroyMap } from './map.js';
-import { vLogin, vRegistrar, vClasificar, vAsignar, vFlota, vRutas, vSeg, vInd } from './views.js';
+import { vLogin, vRegistrar, vClasificar, vAsignar, vFlota, vRutas, vSeg, vInd } from './views.js?v=certificados-1';
 
 const estadoInicial = () => ({
   tab: 0, places: [], prods: [], ind: {}, ruta: null, vehiculos: [], editVeh: null
@@ -263,6 +263,20 @@ function bindEvents() {
         await api(`/productos/${id}/entregar`, { method: "POST" });
         return "Entrega registrada.";
       });
+    };
+  });
+
+  document.querySelectorAll(".btn-certificado").forEach(btn => {
+    btn.onclick = async () => {
+      btn.disabled = true;
+      try {
+        await descargarCertificado(btn.dataset.donanteId);
+        aviso("Certificado descargado.");
+      } catch (e) {
+        aviso(e.message, true);
+      } finally {
+        if (btn.isConnected) btn.disabled = false;
+      }
     };
   });
 }
