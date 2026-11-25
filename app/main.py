@@ -7,10 +7,10 @@ from pathlib import Path
 from uuid import UUID, uuid4
 
 import httpx
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy import inspect, select
 from sqlalchemy.exc import IntegrityError
 
@@ -117,17 +117,62 @@ async def chequear_reputacion_ip(request: Request):
     return True
 
 
-app = FastAPI(title="ReMarket 2.0", lifespan=lifespan)
+app = FastAPI(
+    title="ReMarket 2.0",
+    description=(
+        "API para gestionar lugares, productos, flota y rutas de rescate. "
+        "Las rutas bajo `/api` requieren una sesión Bearer; inicia sesión en "
+        "`POST /api/login` y usa **Authorize** para ingresar el token."
+    ),
+    version="2.0.0",
+    openapi_tags=[
+        {"name": "Autenticación", "description": "Inicio de sesión y emisión de tokens."},
+        {"name": "Geolocalización", "description": "Búsqueda de direcciones y coordenadas."},
+        {"name": "Lugares", "description": "Gestión de bases, donantes y beneficiarios."},
+        {"name": "Productos", "description": "Inventario, entregas y certificados PDF."},
+        {"name": "Vehículos", "description": "Configuración y disponibilidad de la flota."},
+        {"name": "Rutas", "description": "Planificación y consulta de rutas logísticas."},
+        {"name": "Indicadores", "description": "Métricas de impacto y operación."},
+        {"name": "Asistente", "description": "Ayuda contextual sobre el uso de ReMarket."},
+    ],
+    lifespan=lifespan,
+)
 # Todo lo que cuelga de `api` exige sesión válida.
 api = APIRouter(prefix="/api", dependencies=[Depends(auth.usuario_actual)])
 
 
 class LoginIn(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {"username": "admin", "password": "contraseña-de-ejemplo"}
+            ]
+        }
+    )
+
     username: str = Field(max_length=50)
     password: str = Field(max_length=200)
 
 
 class PlaceIn(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {
+                    "nombre": "Supermercado Centro",
+                    "tipo": "donante",
+                    "lat": -29.9027,
+                    "lng": -71.2519,
+                    "direccion": "La Serena, Chile",
+                    "personas": 0,
+                    "capacidad_kg": 0,
+                    "frio": False,
+                    "necesidades": [],
+                }
+            ]
+        }
+    )
+
     nombre: str = Field(min_length=1, max_length=100)
     tipo: str = Field(pattern="^(donante|beneficiario|base)$")
     lat: float | None = Field(default=None, ge=-90, le=90)
@@ -140,6 +185,21 @@ class PlaceIn(BaseModel):
 
 
 class ProductoIn(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {
+                    "nombre": "Leche próxima a vencer",
+                    "categoria": "Alimentos perecibles",
+                    "kg": 25,
+                    "estado": "Próximo a vencer",
+                    "vence": "2026-12-31",
+                    "donante_id": "11111111-1111-4111-a111-111111111111",
+                }
+            ]
+        }
+    )
+
     nombre: str = Field(min_length=1, max_length=100)
     categoria: str
     kg: float = Field(gt=0, lt=1_000_000)
@@ -149,6 +209,24 @@ class ProductoIn(BaseModel):
 
 
 class VehiculoIn(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {
+                    "nombre": "Camión refrigerado",
+                    "patente": "AB-CD-12",
+                    "capacidad_kg": 1500,
+                    "tiene_frio": True,
+                    "costo_km": 650,
+                    "costo_fijo": 8000,
+                    "turno_inicio": "08:00:00",
+                    "turno_fin": "18:00:00",
+                    "activo": True,
+                }
+            ]
+        }
+    )
+
     nombre: str = Field(min_length=1, max_length=100)
     patente: str | None = Field(default=None, max_length=20)
     capacidad_kg: int = Field(gt=0, le=50_000)
@@ -192,7 +270,32 @@ def veh_out(v):
 
 # ------------------------------------------------------------------ Autenticación
 
-@app.post("/api/login", dependencies=[Depends(chequear_reputacion_ip)])
+@app.post(
+    "/api/login",
+    summary="Iniciar sesión",
+    description=(
+        "Valida las credenciales y devuelve un token Bearer para las rutas "
+        "protegidas bajo `/api`."
+    ),
+    tags=["Autenticación"],
+    dependencies=[Depends(chequear_reputacion_ip)],
+    responses={
+        200: {
+            "description": "Sesión iniciada.",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "token": "<token-bearer>",
+                        "usuario": "admin",
+                        "roles": ["Admin"],
+                    }
+                }
+            },
+        },
+        401: {"description": "Credenciales inválidas o usuario inactivo."},
+        403: {"description": "La IP fue bloqueada por su puntaje de riesgo."},
+    },
+)
 def login(d: LoginIn, db=Depends(get_db)):
     u = db.scalars(select(Usuario).where(Usuario.nombre_usuario == d.username)).first()
     ok = auth.verificar_password(d.password, u.contrasena_hash if u else auth.HASH_FALSO)
@@ -205,8 +308,19 @@ def login(d: LoginIn, db=Depends(get_db)):
 
 # ------------------------------------------------------------------ Lugares
 
-@api.get("/geocode")
-async def geocode(q: str):
+@api.get(
+    "/geocode",
+    summary="Geocodificar una dirección",
+    description=(
+        "Busca hasta cinco direcciones en Chile y devuelve sus coordenadas "
+        "latitud/longitud. Depende del servicio Nominatim."
+    ),
+    tags=["Geolocalización"],
+    responses={502: {"description": "El servicio de geocodificación no está disponible."}},
+)
+async def geocode(
+    q: str = Query(..., min_length=1, description="Dirección que se buscará en Chile."),
+):
     """Dirección -> coordenadas (Nominatim)."""
     async with httpx.AsyncClient(timeout=10, headers={"User-Agent": NOMINATIM_UA}) as c:
         r = await c.get(f"{NOMINATIM}/search", params={"q": q, "format": "jsonv2", "countrycodes": "cl", "limit": 5})
@@ -215,12 +329,30 @@ async def geocode(q: str):
     return [{"nombre": x["display_name"], "lat": float(x["lat"]), "lng": float(x["lon"])} for x in r.json()]
 
 
-@api.get("/places")
+@api.get(
+    "/places",
+    summary="Listar lugares",
+    description="Devuelve las bases, donantes y beneficiarios ordenados por nombre.",
+    tags=["Lugares"],
+)
 def listar_places(db=Depends(get_db)):
     return [place_out(p) for p in db.scalars(select(Place).order_by(Place.nombre))]
 
 
-@api.post("/places", status_code=201)
+@api.post(
+    "/places",
+    status_code=201,
+    summary="Crear un lugar",
+    description=(
+        "Registra una base, donante o beneficiario. Proporciona latitud y "
+        "longitud, o una dirección para geocodificar."
+    ),
+    tags=["Lugares"],
+    responses={
+        201: {"description": "Lugar creado."},
+        422: {"description": "Datos inválidos, categoría no válida o dirección no encontrada."},
+    },
+)
 async def crear_place(d: PlaceIn, db=Depends(get_db)):
     lat, lng = d.lat, d.lng
     if lat is None or lng is None:
@@ -241,12 +373,37 @@ async def crear_place(d: PlaceIn, db=Depends(get_db)):
 
 # ------------------------------------------------------------------ Productos
 
-@api.get("/productos")
+@api.get(
+    "/productos",
+    summary="Listar productos",
+    description=(
+        "Devuelve el inventario con estado logístico, días restantes, puntaje "
+        "de urgencia y prioridad, ordenado desde el puntaje más alto."
+    ),
+    tags=["Productos"],
+)
 def listar_productos(db=Depends(get_db)):
     return sorted((prod_out(p) for p in db.scalars(select(Producto))), key=lambda x: -x["puntaje"])
 
 
-@api.get("/productos/certificado/{donante_id}")
+@api.get(
+    "/productos/certificado/{donante_id}",
+    summary="Descargar certificado tributario",
+    description=(
+        "Genera un PDF con los productos del donante cuyo estado sea "
+        "`Entregado`. El archivo se entrega como descarga."
+    ),
+    tags=["Productos"],
+    response_class=Response,
+    responses={
+        200: {
+            "description": "Certificado PDF.",
+            "content": {"application/pdf": {}},
+        },
+        400: {"description": "El donante no tiene productos entregados."},
+        404: {"description": "No se encontró el donante."},
+    },
+)
 def descargar_certificado_tributario(donante_id: UUID, db=Depends(get_db)):
     donante = db.get(Place, donante_id)
     if not donante:
@@ -289,7 +446,20 @@ def descargar_certificado_tributario(donante_id: UUID, db=Depends(get_db)):
     )
 
 
-@api.post("/productos", status_code=201)
+@api.post(
+    "/productos",
+    status_code=201,
+    summary="Registrar un producto",
+    description=(
+        "Agrega un producto al inventario. La fecha de vencimiento debe ser "
+        "posterior a hoy y el donante debe existir."
+    ),
+    tags=["Productos"],
+    responses={
+        201: {"description": "Producto registrado con estado `Disponible`."},
+        422: {"description": "Categoría, fecha de vencimiento o donante no válidos."},
+    },
+)
 def crear_producto(d: ProductoIn, db=Depends(get_db)):
     if d.categoria not in logic.CATEGORIAS:
         raise HTTPException(422, "Categoría no válida")
@@ -304,13 +474,29 @@ def crear_producto(d: ProductoIn, db=Depends(get_db)):
     return prod_out(p)
 
 
-@api.post("/asignar")
+@api.post(
+    "/asignar",
+    summary="Asignar productos",
+    description=(
+        "Asigna productos disponibles a beneficiarios compatibles según "
+        "categoría, frío, capacidad y distancia."
+    ),
+    tags=["Productos"],
+)
 def asignar(db=Depends(get_db)):
     ok, no = logic.asignar(db)
     return {"asignados": ok, "sin_destino": no}
 
 
-@api.post("/productos/{pid}/entregar")
+@api.post(
+    "/productos/{pid}/entregar",
+    summary="Registrar entrega de un producto",
+    description="Cambia el estado de un producto `En ruta` a `Entregado`.",
+    tags=["Productos"],
+    responses={
+        400: {"description": "El producto no existe o no está `En ruta`."},
+    },
+)
 def entregar(pid: UUID, db=Depends(get_db)):
     p = db.get(Producto, pid)
     if not p or p.status != "En ruta":
@@ -343,12 +529,29 @@ def _en_ruta(db, vid) -> bool:
         .where(Ruta.vehiculo_id == vid, Producto.status == "En ruta").limit(1)).first() is not None
 
 
-@api.get("/vehiculos")
+@api.get(
+    "/vehiculos",
+    summary="Listar vehículos",
+    description="Devuelve la flota ordenada por nombre, incluyendo capacidad y estado.",
+    tags=["Vehículos"],
+)
 def listar_vehiculos(db=Depends(get_db)):
     return [veh_out(v) for v in db.scalars(select(Vehiculo).order_by(Vehiculo.nombre))]
 
 
-@api.post("/vehiculos", status_code=201, dependencies=[Depends(GESTION)])
+@api.post(
+    "/vehiculos",
+    status_code=201,
+    summary="Crear un vehículo",
+    description="Registra un vehículo. Requiere rol de gestión.",
+    tags=["Vehículos"],
+    dependencies=[Depends(GESTION)],
+    responses={
+        201: {"description": "Vehículo creado."},
+        403: {"description": "El usuario no tiene un rol de gestión."},
+        409: {"description": "Ya existe un vehículo con esa patente."},
+    },
+)
 def crear_vehiculo(d: VehiculoIn, db=Depends(get_db)):
     v = Vehiculo(**_datos_vehiculo(d))
     db.add(v)
@@ -356,7 +559,21 @@ def crear_vehiculo(d: VehiculoIn, db=Depends(get_db)):
     return veh_out(v)
 
 
-@api.put("/vehiculos/{vid}", dependencies=[Depends(GESTION)])
+@api.put(
+    "/vehiculos/{vid}",
+    summary="Actualizar un vehículo",
+    description=(
+        "Actualiza sus datos y disponibilidad. No se puede desactivar mientras "
+        "tenga productos `En ruta`. Requiere rol de gestión."
+    ),
+    tags=["Vehículos"],
+    dependencies=[Depends(GESTION)],
+    responses={
+        403: {"description": "El usuario no tiene un rol de gestión."},
+        404: {"description": "Vehículo no encontrado."},
+        409: {"description": "Patente duplicada o vehículo con productos en ruta."},
+    },
+)
 def editar_vehiculo(vid: UUID, d: VehiculoIn, db=Depends(get_db)):
     v = db.get(Vehiculo, vid)
     if not v:
@@ -369,7 +586,21 @@ def editar_vehiculo(vid: UUID, d: VehiculoIn, db=Depends(get_db)):
     return veh_out(v)
 
 
-@api.delete("/vehiculos/{vid}", dependencies=[Depends(GESTION)])
+@api.delete(
+    "/vehiculos/{vid}",
+    summary="Eliminar o desactivar un vehículo",
+    description=(
+        "Elimina el vehículo si no tiene rutas históricas; si tiene historial "
+        "lo desactiva para conservar trazabilidad. Requiere rol de gestión."
+    ),
+    tags=["Vehículos"],
+    dependencies=[Depends(GESTION)],
+    responses={
+        403: {"description": "El usuario no tiene un rol de gestión."},
+        404: {"description": "Vehículo no encontrado."},
+        409: {"description": "No se puede eliminar mientras tenga productos en ruta."},
+    },
+)
 def borrar_vehiculo(vid: UUID, db=Depends(get_db)):
     v = db.get(Vehiculo, vid)
     if not v:
@@ -465,7 +696,20 @@ def _plan_out(rs, vehs):
     }
 
 
-@api.post("/rutas/planificar", dependencies=[Depends(GESTION)])
+@api.post(
+    "/rutas/planificar",
+    summary="Planificar rutas",
+    description=(
+        "Optimiza los envíos asignados usando la flota activa, capacidad, "
+        "refrigeración, ventanas horarias y coordenadas. Requiere rol de gestión."
+    ),
+    tags=["Rutas"],
+    dependencies=[Depends(GESTION)],
+    responses={
+        400: {"description": "No hay envíos planificables o faltan datos logísticos."},
+        403: {"description": "El usuario no tiene un rol de gestión."},
+    },
+)
 async def planificar(db=Depends(get_db)):
     items = db.scalars(select(Producto).where(
         Producto.status == "Asignado",
@@ -534,7 +778,15 @@ async def planificar(db=Depends(get_db)):
     return out
 
 
-@api.get("/rutas/ultima")
+@api.get(
+    "/rutas/ultima",
+    summary="Consultar la última ruta activa",
+    description=(
+        "Devuelve el plan más reciente que todavía contiene productos "
+        "`En ruta`; devuelve `null` si no hay rutas activas."
+    ),
+    tags=["Rutas"],
+)
 def ultima_ruta(db=Depends(get_db)):
     """Plan más reciente que todavía tiene rutas con productos En ruta (solo esas rutas)."""
     activos = set(db.scalars(select(Producto.ruta_id).where(
@@ -551,7 +803,15 @@ def ultima_ruta(db=Depends(get_db)):
 
 # ------------------------------------------------------------------ Indicadores
 
-@api.get("/indicadores")
+@api.get(
+    "/indicadores",
+    summary="Consultar indicadores",
+    description=(
+        "Resume kilómetros, costos, tiempos de entrega, kilos recuperados y "
+        "organizaciones/personas beneficiarias."
+    ),
+    tags=["Indicadores"],
+)
 def indicadores(db=Depends(get_db)):
     rutas = db.scalars(select(Ruta)).all()
     ent = db.scalars(select(Producto).where(Producto.status == "Entregado")).all()
@@ -596,6 +856,6 @@ app.include_router(chat.router, dependencies=[Depends(auth.usuario_actual)])
 app.mount("/static", StaticFiles(directory=Path(__file__).resolve().parent / "../frontend/static"), name="static")
 
 
-@app.get("/")
+@app.get("/", include_in_schema=False)
 def read_index():
     return FileResponse(Path(__file__).resolve().parent / "../frontend/index.html")

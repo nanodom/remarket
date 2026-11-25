@@ -12,7 +12,8 @@ import os
 import secrets
 import time
 
-from fastapi import Depends, HTTPException, Request
+from fastapi import Depends, HTTPException
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 
 from .models import Empleado, Rol, SessionLocal, Usuario
@@ -25,6 +26,7 @@ TOKEN_HORAS = int(os.getenv("TOKEN_HORAS", 8))
 
 # "Admin" es el rol que crea el seeder SQL; "Administrador" se mantiene por compatibilidad.
 ROLES_GESTION = ("Admin", "Administrador", "Operador Logistico")
+TOKEN_BEARER = HTTPBearer(auto_error=False)
 
 _SCRYPT = dict(n=2**14, r=8, p=1, dklen=32)
 
@@ -68,13 +70,14 @@ def crear_token(uid: str, usuario: str, roles: list[str]) -> str:
     return f"{cuerpo}.{_firma(cuerpo)}"
 
 
-def usuario_actual(request: Request) -> dict:
+def usuario_actual(
+    credentials: HTTPAuthorizationCredentials | None = Depends(TOKEN_BEARER),
+) -> dict:
     """Dependencia de FastAPI: exige `Authorization: Bearer <token>` válido."""
-    cab = request.headers.get("Authorization", "")
-    if not cab.startswith("Bearer "):
+    if credentials is None:
         raise HTTPException(401, "Sesión requerida")
     try:
-        cuerpo, firma = cab[7:].split(".")
+        cuerpo, firma = credentials.credentials.split(".")
         if not hmac.compare_digest(firma, _firma(cuerpo)):
             raise ValueError("firma")
         datos = json.loads(_unb64(cuerpo))

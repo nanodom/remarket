@@ -6,7 +6,7 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends
 from google import genai
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func, select
 
 from .models import Producto, SessionLocal
@@ -93,6 +93,19 @@ class Msg(BaseModel):
 
 
 class ChatIn(BaseModel):
+  model_config = ConfigDict(
+      json_schema_extra={
+          "examples": [
+              {
+                  "mensajes": [
+                      {"role": "user", "content": "¿Cómo se asignan los productos?"}
+                  ],
+                  "pestana": "Asignar",
+              }
+          ]
+      }
+  )
+
   mensajes: list[Msg] = Field(min_length=1, max_length=30)
   pestana: str = Field(default="", max_length=40)
 
@@ -116,7 +129,15 @@ async def _gemini(msgs: list[Msg], pestana: str, ctx: str) -> str:
   return (response.text or "").strip()
 
 
-@router.post("/api/chat")
+@router.post(
+    "/api/chat",
+    summary="Consultar al asistente de ayuda",
+    description=(
+        "Envía el historial reciente y la pestaña actual. Responde usando "
+        "Gemini si está configurado; si no, utiliza respuestas básicas."
+    ),
+    tags=["Asistente"],
+)
 async def chat(d: ChatIn, db=Depends(get_db)):
   ultimo = next((m.content for m in reversed(d.mensajes) if m.role == "user"), "")
   if client:

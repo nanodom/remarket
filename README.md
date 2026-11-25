@@ -30,7 +30,11 @@ cd .. && docker compose up --build
 4. Costo = km × `COSTO_KM` + retiros × `FIJO_RETIRO` (variables de entorno, CLP).
 
 ## Endpoints
-`GET/POST /api/places` · `GET /api/geocode?q=` · `GET/POST /api/productos` · `GET /api/productos/certificado/{donante_id}` · `POST /api/asignar` · `POST /api/rutas/planificar` · `POST /api/productos/{id}/entregar` · `GET /api/indicadores`
+`POST /api/login` · `GET/POST /api/places` · `GET /api/geocode?q=` · `GET/POST /api/productos` · `GET /api/productos/certificado/{donante_id}` · `POST /api/asignar` · `POST /api/productos/{id}/entregar` · `GET/POST /api/vehiculos` · `PUT/DELETE /api/vehiculos/{id}` · `POST /api/rutas/planificar` · `GET /api/rutas/ultima` · `GET /api/indicadores` · `POST /api/chat`
+
+### Swagger interactivo
+
+Abre `http://localhost:8000/docs` para consultar las operaciones agrupadas por área. Los modelos de solicitud incluyen ejemplos JSON. Para probar rutas protegidas, ejecuta `POST /api/login`, copia el valor de `token` y pulsa **Authorize**; pega el token sin escribir el prefijo `Bearer` (Swagger lo añade automáticamente). Los endpoints públicos de documentación no requieren inicio de sesión.
 
 ## Certificado de donación en PDF
 
@@ -51,7 +55,7 @@ curl -H "Authorization: Bearer <token>" \
 
 El archivo debe comenzar con la firma `%PDF-`; ábrelo con un lector PDF para revisar el diseño y los datos. Si no existen productos entregados, completa el flujo de asignación, planificación y entrega antes de probar este endpoint.
 
-Para probar solo la generación del archivo, sin iniciar la API, ejecuta `python -m pytest tests/test_reports.py -q` (requiere `pytest`).
+Instala también las herramientas de prueba con `pip install -r requirements-dev.txt` y ejecuta la suite con `python -m pytest`. Para probar solo la generación PDF: `python -m pytest tests/test_reports.py -q`.
 
 ### Estructura del documento
 
